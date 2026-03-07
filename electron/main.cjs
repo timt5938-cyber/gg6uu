@@ -1,24 +1,39 @@
 ﻿const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { exec, spawn } = require("node:child_process");
 
 const { scanReference } = require("./analysis/engine.cjs");
 const { createLogger } = require("./logger.cjs");
 const { createSettingsStore, readSettings, updateSettings } = require("./settings.cjs");
 
+const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
+
 function resolveReferenceRoot() {
   const envPath = (process.env.REFERENCE_ROOT || "").trim();
-  const candidates = [
-    envPath || null,
-    "C:\\12\\reference",
-    path.join(process.cwd(), "reference"),
-    path.resolve(__dirname, "../reference"),
-    path.join(path.dirname(process.execPath), "reference"),
-    process.resourcesPath ? path.join(process.resourcesPath, "reference") : null,
-  ].filter(Boolean);
+  const bundledReference = process.resourcesPath ? path.join(process.resourcesPath, "reference") : null;
+
+  const candidates = isDev
+    ? [
+        envPath || null,
+        "C:\\12\\reference",
+        path.join(process.cwd(), "reference"),
+        path.resolve(__dirname, "../reference"),
+        bundledReference,
+        path.join(path.dirname(process.execPath), "reference"),
+      ]
+    : [
+        envPath || null,
+        bundledReference,
+        path.join(path.dirname(process.execPath), "resources", "reference"),
+        path.join(path.dirname(process.execPath), "reference"),
+        path.resolve(__dirname, "../reference"),
+        "C:\\12\\reference",
+        path.join(process.cwd(), "reference"),
+      ];
 
   for (const candidate of candidates) {
+    if (!candidate) continue;
     try {
       if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
         return candidate;
@@ -28,11 +43,10 @@ function resolveReferenceRoot() {
     }
   }
 
-  return envPath || "C:\\12\\reference";
+  return bundledReference || envPath || "C:\\12\\reference";
 }
 
 const REFERENCE_ROOT = resolveReferenceRoot();
-const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 
 const settingsStore = createSettingsStore();
 let settings = readSettings(settingsStore);
@@ -295,6 +309,47 @@ function startWatcher() {
   }
 }
 
+function stripWrappingQuotes(value) {
+  let normalized = String(value || "").trim();
+
+  for (let i = 0; i < 6; i += 1) {
+    const before = normalized;
+    normalized = normalized
+      .replace(/^\\+"+/, "")
+      .replace(/\\+"+$/, "")
+      .replace(/^\\+'+/, "")
+      .replace(/\\+'+$/, "")
+      .replace(/^"+/, "")
+      .replace(/"+$/, "")
+      .replace(/^'+/, "")
+      .replace(/'+$/, "")
+      .trim();
+
+    if (before === normalized) {
+      break;
+    }
+  }
+
+  return normalized.replace(/\\+"/g, '"').replace(/\\+'/g, "'");
+}
+
+function resolveStrategyPath(sourceFile) {
+  const raw = String(sourceFile || "").trim().replace(/\\+"/g, '"');
+  const normalized = path.normalize(stripWrappingQuotes(raw).replace(/["']+/g, ""));
+
+  if (path.isAbsolute(normalized) && fs.existsSync(normalized)) {
+    return normalized;
+  }
+
+  const baseName = path.basename(normalized).replace(/^"+|"+$/g, "");
+  const fromReference = path.join(REFERENCE_ROOT, baseName);
+  if (fs.existsSync(fromReference)) {
+    return fromReference;
+  }
+
+  return normalized;
+}
+
 function applyAutoRefresh() {
   if (autoRefreshTimer) {
     clearInterval(autoRefreshTimer);
@@ -433,24 +488,43 @@ async function startBypassRuntime(profileId) {
     setActiveProfile(profile.id, "start");
   }
 
-  const ext = path.extname(profile.sourceFile).toLowerCase();
-  const cwd = path.dirname(profile.sourceFile);
-  let command = profile.sourceFile;
-  let args = [];
+  const sourceFileRaw = String(profile.sourceFile || "");
+  const rawSourceFile = resolveStrategyPath(sourceFileRaw);
+  const ext = path.extname(rawSourceFile).toLowerCase();
+  const cwd = path.dirname(rawSourceFile);
+  const winwsPath = path.join(REFERENCE_ROOT, "bin", "winws.exe");
 
-  if (ext === ".bat" || ext === ".cmd") {
-    command = "cmd.exe";
-    args = ["/d", "/s", "/c", `"${profile.sourceFile}"`];
+  if (!fs.existsSync(rawSourceFile)) {
+    throw new Error(`Strategy file not found: ${rawSourceFile}`);
+  }
+  if (!fs.existsSync(winwsPath)) {
+    throw new Error(`winws.exe not found: ${winwsPath}`);
   }
 
-  logger.info("RUNTIME", `Starting strategy: ${profile.name}`);
+  let command = rawSourceFile;
+  let args = [];
+  const isBatchProfile = ext === ".bat" || ext === ".cmd";
 
-  const proc = spawn(command, args, {
-    cwd,
-    shell: false,
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  logger.info("RUNTIME", `Starting strategy: ${profile.name}`);
+  logger.info("RUNTIME", `sourceFile(raw): ${sourceFileRaw}`);
+  logger.info("RUNTIME", `sourceFile(normalized): ${rawSourceFile}`);
+  logger.info("RUNTIME", `Command: ${isBatchProfile ? "cmd.exe (exec)" : command}`);
+  logger.info("RUNTIME", `Args: ${isBatchProfile ? "[]" : JSON.stringify(args)}`);
+  logger.info("RUNTIME", `CWD: ${cwd}`);
+  logger.info("RUNTIME", `winws exists: ${fs.existsSync(winwsPath) ? "yes" : "no"}`);
+
+  const proc = isBatchProfile
+    ? exec(`"${rawSourceFile}"`, {
+        cwd,
+        windowsHide: true,
+        shell: "cmd.exe",
+      })
+    : spawn(command, args, {
+        cwd,
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
 
   activeProfileProcess = proc;
   activeProfileProcessId = profile.id;
@@ -667,6 +741,9 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+
+
+
 
 
 

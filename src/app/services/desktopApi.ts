@@ -162,6 +162,35 @@ export const desktopApi = {
     return window.electronAPI.getIpLists();
   },
 
+  async getServiceStatus(): Promise<{ installed: boolean; running: boolean; rawOutput: string; rawError: string }> {
+    if (!window.electronAPI) {
+      return { installed: false, running: false, rawOutput: "", rawError: "Bridge unavailable" };
+    }
+    return window.electronAPI.getServiceStatus();
+  },
+
+  async installService(profileId: string): Promise<{ success: boolean; message: string; status: { installed: boolean; running: boolean; rawOutput: string; rawError: string } }> {
+    if (!window.electronAPI) {
+      return {
+        success: false,
+        message: bridgeMissingMessage(),
+        status: { installed: false, running: false, rawOutput: "", rawError: bridgeMissingMessage() },
+      };
+    }
+    return window.electronAPI.installService(profileId);
+  },
+
+  async removeService(): Promise<{ success: boolean; message: string; status: { installed: boolean; running: boolean; rawOutput: string; rawError: string } }> {
+    if (!window.electronAPI) {
+      return {
+        success: false,
+        message: bridgeMissingMessage(),
+        status: { installed: false, running: false, rawOutput: "", rawError: bridgeMissingMessage() },
+      };
+    }
+    return window.electronAPI.removeService();
+  },
+
   async minimizeWindow(): Promise<void> {
     await window.electronAPI?.minimizeWindow();
   },

@@ -36,6 +36,9 @@ export type ElectronAPI = {
   getDiagnostics(): Promise<DiagnosticEntry[]>;
   getReferenceSummary(): Promise<ReferenceSummary>;
   getIpLists(): Promise<IpListReference[]>;
+  getServiceStatus(): Promise<{ installed: boolean; running: boolean; rawOutput: string; rawError: string }>;
+  installService(profileId: string): Promise<{ success: boolean; message: string; status: { installed: boolean; running: boolean; rawOutput: string; rawError: string } }>;
+  removeService(): Promise<{ success: boolean; message: string; status: { installed: boolean; running: boolean; rawOutput: string; rawError: string } }>;
 
   minimizeWindow(): Promise<void>;
   maximizeWindow(): Promise<boolean>;
@@ -96,6 +99,9 @@ const electronApi: ElectronAPI = {
   getDiagnostics: () => ipcRenderer.invoke("app:getDiagnostics"),
   getReferenceSummary: () => ipcRenderer.invoke("app:getReferenceSummary"),
   getIpLists: () => ipcRenderer.invoke("app:getIpLists"),
+  getServiceStatus: () => ipcRenderer.invoke("app:getServiceStatus"),
+  installService: (profileId) => ipcRenderer.invoke("app:installService", profileId),
+  removeService: () => ipcRenderer.invoke("app:removeService"),
 
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   maximizeWindow: () => ipcRenderer.invoke("window:maximize"),

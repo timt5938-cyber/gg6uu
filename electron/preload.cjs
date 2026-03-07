@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getDiagnostics: () => invoke("app:getDiagnostics"),
   getReferenceSummary: () => invoke("app:getReferenceSummary"),
   getIpLists: () => invoke("app:getIpLists"),
+  getServiceStatus: () => invoke("app:getServiceStatus"),
+  installService: (profileId) => invoke("app:installService", profileId),
+  removeService: () => invoke("app:removeService"),
 
   minimizeWindow: () => invoke("window:minimize"),
   maximizeWindow: () => invoke("window:maximize"),

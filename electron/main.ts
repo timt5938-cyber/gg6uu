@@ -1,4 +1,4 @@
-import {
+﻿import {
   app,
   BrowserWindow,
   ipcMain,
@@ -11,7 +11,7 @@ import {
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ChildProcess, spawn, spawnSync } from "node:child_process";
+import { ChildProcess, exec, spawn, spawnSync } from "node:child_process";
 
 import { scanReference } from "./analysisEngine";
 import { createLogger } from "./logger";
@@ -486,6 +486,47 @@ function tokenizeCommandLine(commandLine: string): string[] {
   });
 }
 
+function stripWrappingQuotes(value: string): string {
+  let normalized = String(value || "").trim();
+
+  for (let i = 0; i < 6; i += 1) {
+    const before = normalized;
+    normalized = normalized
+      .replace(/^\\+"+/, "")
+      .replace(/\\+"+$/, "")
+      .replace(/^\\+'+/, "")
+      .replace(/\\+'+$/, "")
+      .replace(/^"+/, "")
+      .replace(/"+$/, "")
+      .replace(/^'+/, "")
+      .replace(/'+$/, "")
+      .trim();
+
+    if (before === normalized) {
+      break;
+    }
+  }
+
+  return normalized.replace(/\\+"/g, '"').replace(/\\+'/g, "'");
+}
+
+
+function resolveStrategyPath(sourceFile: string): string {
+  const raw = String(sourceFile || "").trim().replace(/\\+"/g, '"');
+  const normalized = path.normalize(stripWrappingQuotes(raw).replace(/["']+/g, ""));
+
+  if (path.isAbsolute(normalized) && fs.existsSync(normalized)) {
+    return normalized;
+  }
+
+  const baseName = path.basename(normalized).replace(/^"+|"+$/g, "");
+  const fromReference = path.join(REFERENCE_ROOT, baseName);
+  if (fs.existsSync(fromReference)) {
+    return fromReference;
+  }
+
+  return normalized;
+}
 function sanitizeWinwsFilterValue(raw: string): string {
   return raw
     .split(",")
@@ -643,14 +684,14 @@ function parseWinwsDirectSpawn(sourceFile: string): { command: string; args: str
   };
 }
 function buildProfileSpawn(profile: Profile): { command: string; args: string[]; cwd: string } {
-  const sourceFile = profile.sourceFile;
+  const sourceFile = resolveStrategyPath(profile.sourceFile);
   const cwd = path.dirname(sourceFile);
   const ext = path.extname(sourceFile).toLowerCase();
 
   if (ext === ".bat" || ext === ".cmd") {
     return {
-      command: "cmd.exe",
-      args: ["/d", "/c", `call "${sourceFile}"`],
+      command: sourceFile,
+      args: [],
       cwd,
     };
   }
@@ -855,7 +896,19 @@ async function startProfile(profileId?: string, reason = "manual-start"): Promis
     throw new Error("No available profile to start");
   }
 
+  const rawSourceFile = String(target.sourceFile || "");
+  const sourceFile = resolveStrategyPath(rawSourceFile);
+  const winwsPath = path.join(REFERENCE_ROOT, "bin", "winws.exe");
+
+  if (!fs.existsSync(sourceFile)) {
+    throw new Error(`Strategy file not found: ${sourceFile}`);
+  }
+  if (!fs.existsSync(winwsPath)) {
+    throw new Error(`winws.exe not found: ${winwsPath}`);
+  }
+
   target = applyActiveProfileSelection(target.id, reason);
+  target = { ...target, sourceFile };
 
   if (activeStrategyProcess && activeStrategyProfileId === target.id) {
     logger.info("RUNTIME", `Profile ${target.name} already running`);
@@ -869,17 +922,31 @@ async function startProfile(profileId?: string, reason = "manual-start"): Promis
   }
 
   const spawnConfig = buildProfileSpawn(target);
+  const ext = path.extname(sourceFile).toLowerCase();
+  const isBatchProfile = ext === ".bat" || ext === ".cmd";
 
   logger.info("RUNTIME", `Starting profile ${target.name}: ${path.basename(target.sourceFile)}`);
+  logger.info("RUNTIME", `sourceFile(raw): ${rawSourceFile}`);
+  logger.info("RUNTIME", `sourceFile(normalized): ${sourceFile}`);
+  logger.info("RUNTIME", `Command: ${spawnConfig.command}`);
+  logger.info("RUNTIME", `Args: ${JSON.stringify(spawnConfig.args)}`);
+  logger.info("RUNTIME", `CWD: ${spawnConfig.cwd}`);
+  logger.info("RUNTIME", `winws exists: ${fs.existsSync(winwsPath) ? "yes" : "no"}`);
 
   try {
-    const proc = spawn(spawnConfig.command, spawnConfig.args, {
-      cwd: spawnConfig.cwd,
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: false,
-    });
+    const proc = isBatchProfile
+      ? exec(`"${sourceFile}"`, {
+          cwd: spawnConfig.cwd,
+          windowsHide: true,
+          shell: "cmd.exe",
+        })
+      : spawn(spawnConfig.command, spawnConfig.args, {
+          cwd: spawnConfig.cwd,
+          shell: false,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: false,
+        });
 
     activeStrategyProcess = proc;
     activeStrategyProfileId = target.id;
@@ -998,6 +1065,155 @@ function buildProxyArgs(config: ProxyConfig): string[] {
   }
 
   return args;
+}
+
+type ServiceStatus = {
+  installed: boolean;
+  running: boolean;
+  rawOutput: string;
+  rawError: string;
+};
+
+function getServiceBatPath(): string {
+  return path.join(REFERENCE_ROOT, "service.bat");
+}
+
+function getServiceStrategyNames(): string[] {
+  if (!fs.existsSync(REFERENCE_ROOT)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(REFERENCE_ROOT)
+    .filter((name) => /\.bat$/i.test(name) && !/^service/i.test(name))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+}
+
+function queryServiceStatus(): Promise<ServiceStatus> {
+  return new Promise((resolve) => {
+    const child = spawn("sc", ["query", "zapret"], {
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let out = "";
+    let err = "";
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      out += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      err += chunk.toString();
+    });
+
+    child.on("close", (code) => {
+      resolve({
+        installed: code === 0 && /SERVICE_NAME:\s+zapret/i.test(out),
+        running: /STATE\s*:\s*\d+\s+RUNNING/i.test(out),
+        rawOutput: out,
+        rawError: err,
+      });
+    });
+
+    child.on("error", (error) => {
+      resolve({
+        installed: false,
+        running: false,
+        rawOutput: out,
+        rawError: `${err}\n${error.message}`.trim(),
+      });
+    });
+  });
+}
+
+function runServiceMenu(inputs: string[]): Promise<{ success: boolean; code: number | null; output: string; errorOutput: string }> {
+  return new Promise((resolve) => {
+    const serviceBat = getServiceBatPath();
+    const child = spawn("cmd.exe", ["/d", "/c", `call "${serviceBat}" admin`], {
+      cwd: REFERENCE_ROOT,
+      shell: false,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let out = "";
+    let err = "";
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      out += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      err += chunk.toString();
+    });
+
+    child.on("close", (code) => {
+      resolve({ success: code === 0, code, output: out, errorOutput: err });
+    });
+
+    child.on("error", (error) => {
+      resolve({ success: false, code: null, output: out, errorOutput: `${err}\n${error.message}`.trim() });
+    });
+
+    const payload = `${inputs.join("\r\n")}\r\n`;
+    child.stdin.write(payload);
+    child.stdin.end();
+  });
+}
+
+async function installServiceForProfile(profileId: string): Promise<{ success: boolean; message: string; status: ServiceStatus }> {
+  const profile = appState.profiles.find((item) => item.id === profileId);
+  if (!profile) {
+    throw new Error("Profile not found");
+  }
+
+  const serviceBat = getServiceBatPath();
+  if (!fs.existsSync(serviceBat)) {
+    throw new Error(`service.bat not found: ${serviceBat}`);
+  }
+
+  const strategyNames = getServiceStrategyNames();
+  const selected = path.basename(stripWrappingQuotes(profile.sourceFile));
+  const selectedIndex = strategyNames.findIndex((name) => name.toLowerCase() === selected.toLowerCase());
+
+  if (selectedIndex < 0) {
+    throw new Error(`Selected strategy not found in service menu: ${selected}`);
+  }
+
+  logger.info("SERVICE", `Installing service strategy ${selected}`);
+  const result = await runServiceMenu(["1", String(selectedIndex + 1), "", "0"]);
+  const status = await queryServiceStatus();
+
+  if (!result.success || !status.installed) {
+    return {
+      success: false,
+      message: "Service install command failed",
+      status,
+    };
+  }
+
+  return {
+    success: true,
+    message: `Service installed with strategy ${selected}`,
+    status,
+  };
+}
+
+async function removeService(): Promise<{ success: boolean; message: string; status: ServiceStatus }> {
+  const serviceBat = getServiceBatPath();
+  if (!fs.existsSync(serviceBat)) {
+    throw new Error(`service.bat not found: ${serviceBat}`);
+  }
+
+  logger.info("SERVICE", "Removing zapret service");
+  const result = await runServiceMenu(["2", "", "0"]);
+  const status = await queryServiceStatus();
+
+  return {
+    success: result.success && !status.installed,
+    message: result.success ? "Service removed" : "Service remove command failed",
+    status,
+  };
 }
 
 function createMainWindow(): void {
@@ -1122,6 +1338,9 @@ function registerIpc(): void {
   ipcMain.handle("app:getDiagnostics", async () => appState.diagnostics);
   ipcMain.handle("app:getReferenceSummary", async () => appState.referenceSummary);
   ipcMain.handle("app:getIpLists", async () => appState.ipLists);
+  ipcMain.handle("app:getServiceStatus", async () => queryServiceStatus());
+  ipcMain.handle("app:installService", async (_event, profileId: string) => installServiceForProfile(profileId));
+  ipcMain.handle("app:removeService", async () => removeService());
 
   ipcMain.on("window:minimize", () => mainWindow?.minimize());
   ipcMain.handle("window:minimize", async () => {
@@ -1308,6 +1527,11 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+
+
+
+
+
 
 
 

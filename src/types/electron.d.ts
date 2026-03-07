@@ -35,6 +35,9 @@ export type ElectronAPI = {
   getDiagnostics(): Promise<DiagnosticEntry[]>;
   getReferenceSummary(): Promise<ReferenceSummary>;
   getIpLists(): Promise<IpListReference[]>;
+  getServiceStatus(): Promise<{ installed: boolean; running: boolean; rawOutput: string; rawError: string }>;
+  installService(profileId: string): Promise<{ success: boolean; message: string; status: { installed: boolean; running: boolean; rawOutput: string; rawError: string } }>;
+  removeService(): Promise<{ success: boolean; message: string; status: { installed: boolean; running: boolean; rawOutput: string; rawError: string } }>;
 
   minimizeWindow(): Promise<void>;
   maximizeWindow(): Promise<boolean>;
