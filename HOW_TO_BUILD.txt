@@ -1,0 +1,12 @@
+HOW TO BUILD
+
+1) Open terminal in C:\12
+2) Run: npm install
+3) Run dev mode: npm run dev
+4) Build renderer: npm run build
+5) Build Windows installer: npm run dist
+
+Notes:
+- Reference path is fixed to C:\12\reference (can be overridden by REFERENCE_ROOT env variable).
+- Electron entrypoint: electron\main.cjs
+- Preload bridge: electron\preload.cjs
