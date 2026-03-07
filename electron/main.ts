@@ -744,7 +744,7 @@ function buildProfileSpawn(profile: Profile): { command: string; args: string[];
   if (ext === ".bat" || ext === ".cmd") {
     return {
       command: "cmd.exe",
-      args: ["/d", "/s", "/c", `call "${sourceFile}"`],
+      args: ["/d", "/c", sourceFile],
       cwd,
     };
   }
@@ -1709,6 +1709,7 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+
 
 
 
