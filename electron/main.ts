@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ChildProcess, spawn, spawnSync } from "node:child_process";
+import https from "node:https";
 
 import { scanReference } from "./analysisEngine";
 import { createLogger } from "./logger";
@@ -95,6 +96,21 @@ let activeStrategyProcess: ChildProcess | null = null;
 let activeStrategyProfileId: string | null = null;
 let testAllCancelRequested = false;
 
+function resolveAppIconPath(): string | undefined {
+  const candidates = [
+    path.join(process.cwd(), "build", "icon.ico"),
+    process.resourcesPath ? path.join(process.resourcesPath, "icon.ico") : "",
+    path.join(path.dirname(process.execPath), "icon.ico"),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
 function resolvePreloadPath(): string {
   const cjsPath = path.join(__dirname, "preload.cjs");
   if (fs.existsSync(cjsPath)) {
@@ -250,6 +266,9 @@ function mergeRuntimeProfile(scanProfile: Profile, previous?: Profile): Profile 
     successCount: previous?.successCount ?? 0,
     failCount: previous?.failCount ?? 0,
     isWorkingForCurrentUser: previous?.isWorkingForCurrentUser ?? false,
+    youtubeStatus: previous?.youtubeStatus ?? "not_tested",
+    discordStatus: previous?.discordStatus ?? "not_tested",
+    combinedResult: previous?.combinedResult ?? "not_tested",
   };
 }
 
@@ -973,7 +992,7 @@ async function stopActiveProfile(reason = "manual-stop"): Promise<AppState> {
         isActive: false,
         status: profile.isAvailable ? "online" : profile.status,
         runtimeStatus: profile.isWorkingForCurrentUser ? "working" : "stopped",
-        lastTestResult: "stopped",
+        lastTestResult: reason.startsWith("test-all") ? profile.lastTestResult : "stopped",
       };
     }
     return profile;
@@ -1141,6 +1160,90 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function readHostListFromReference(fileName: string): string[] {
+  const filePath = path.join(REFERENCE_ROOT, "lists", fileName);
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+
+  try {
+    return fs
+      .readFileSync(filePath, "utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => Boolean(line) && !line.startsWith("#") && !line.startsWith(";"));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeProbeHost(raw: string): string {
+  return String(raw || "")
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "")
+    .replace(/^\*\./, "")
+    .toLowerCase();
+}
+
+async function probeHttpsHost(host: string, timeoutMs = 3500): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const req = https.request(
+      {
+        host,
+        path: "/",
+        method: "GET",
+        timeout: timeoutMs,
+      },
+      (res) => {
+        res.resume();
+        resolve((res.statusCode ?? 0) > 0);
+      },
+    );
+
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+
+    req.on("error", () => resolve(false));
+    req.end();
+  });
+}
+
+async function runServiceChecks(): Promise<{ youtube: "working" | "failed"; discord: "working" | "failed"; combined: "both" | "youtube_only" | "discord_only" | "none" }> {
+  const youtubeHosts = [
+    ...readHostListFromReference("list-google.txt"),
+    "www.youtube.com",
+    "youtubei.googleapis.com",
+  ]
+    .map(normalizeProbeHost)
+    .filter(Boolean);
+
+  const discordHosts = ["discord.com", "gateway.discord.gg", "cdn.discordapp.com"]
+    .map(normalizeProbeHost)
+    .filter(Boolean);
+
+  const tryHosts = async (hosts: string[]): Promise<boolean> => {
+    for (const host of hosts.slice(0, 8)) {
+      const ok = await probeHttpsHost(host);
+      if (ok) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const youtubeOk = await tryHosts(youtubeHosts);
+  const discordOk = await tryHosts(discordHosts);
+  const combined = youtubeOk && discordOk ? "both" : youtubeOk ? "youtube_only" : discordOk ? "discord_only" : "none";
+
+  return {
+    youtube: youtubeOk ? "working" : "failed",
+    discord: discordOk ? "working" : "failed",
+    combined,
+  };
+}
 async function testAllProfiles(): Promise<AppState> {
   if (appState.runtime.testAllInProgress) {
     return appState;
@@ -1175,7 +1278,29 @@ async function testAllProfiles(): Promise<AppState> {
 
     try {
       await startProfile(profileId, "test-all");
-      await sleep(5000);
+      await sleep(3500);
+
+      const checks = await runServiceChecks();
+      const resultValue = checks.combined === "none" ? "failed" : "working";
+      const current = getProfileById(profileId);
+      patchProfile(profileId, {
+        youtubeStatus: checks.youtube,
+        discordStatus: checks.discord,
+        combinedResult: checks.combined,
+        runtimeStatus: resultValue === "working" ? "working" : "failed",
+        lastTestResult: resultValue,
+        lastTestAt: new Date().toISOString(),
+        lastSuccessAt: resultValue === "working" ? new Date().toISOString() : current?.lastSuccessAt ?? null,
+        lastFailureAt: resultValue === "failed" ? new Date().toISOString() : current?.lastFailureAt ?? null,
+        successCount: (current?.successCount ?? 0) + (resultValue === "working" ? 1 : 0),
+        failCount: (current?.failCount ?? 0) + (resultValue === "failed" ? 1 : 0),
+        isWorkingForCurrentUser: resultValue === "working" || Boolean(current?.isWorkingForCurrentUser),
+      });
+      appState.runtime.activeServiceResults = {
+        youtube: checks.youtube,
+        discord: checks.discord,
+      };
+      appState.runtime.testResults[profileId] = resultValue;
     } catch (error) {
       logger.warn("RUNTIME", `Test failed to start for ${profileId}: ${error instanceof Error ? error.message : String(error)}`);
       patchProfile(profileId, {
@@ -1427,6 +1552,7 @@ function createMainWindow(): void {
     titleBarStyle: "hidden",
     backgroundColor: "#080808",
     autoHideMenuBar: true,
+    icon: resolveAppIconPath(),
     show: false,
     webPreferences: {
       preload: resolvePreloadPath(),
@@ -1479,6 +1605,7 @@ function createMiniWindow(): void {
     alwaysOnTop: true,
     skipTaskbar: false,
     backgroundColor: "#080808",
+    icon: resolveAppIconPath(),
     webPreferences: {
       preload: resolvePreloadPath(),
       contextIsolation: true,
@@ -1499,7 +1626,9 @@ function createMiniWindow(): void {
 }
 
 function createTray(): void {
-  const icon = nativeImage.createEmpty();
+  const iconPath = resolveAppIconPath();
+  const loadedIcon = iconPath ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
+  const icon = process.platform === "win32" ? loadedIcon.resize({ width: 16, height: 16 }) : loadedIcon;
   tray = new Tray(icon);
   tray.setToolTip("AltProxy");
 
@@ -1686,6 +1815,7 @@ app.on("second-instance", () => {
 });
 
 app.whenReady().then(async () => {
+  app.setAppUserModelId("com.altproxy.control-center");
   registerIpc();
   createMainWindow();
   createTray();
