@@ -1,4 +1,4 @@
-﻿import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppState,
   DiagnosticEntry,
@@ -9,6 +9,32 @@ import type {
   ReferenceSummary,
   SettingsState,
 } from "../src/app/types/state";
+
+
+type WinwsRuntimeDescriptor = {
+  rootDir: string;
+  exePath: string;
+  dllPaths: string[];
+  driverPaths: string[];
+  payloadFiles: string[];
+  exists: boolean;
+  isValid: boolean;
+  validationErrors: string[];
+  resolvedFrom: "env" | "packaged" | "project" | "fallback";
+};
+
+type WinwsRuntimeState = {
+  isAvailable: boolean;
+  isRunning: boolean;
+  pid: number | null;
+  startedAt: string | null;
+  stoppedAt: string | null;
+  lastExitCode: number | null;
+  lastError: string | null;
+  exePath: string | null;
+  runtimeRoot: string | null;
+  validationErrors: string[];
+};
 
 export type ProxyConfig = {
   executable: string;
@@ -41,6 +67,12 @@ export type ElectronAPI = {
   getServiceStatus(): Promise<{ installed: boolean; running: boolean; rawOutput: string; rawError: string }>;
   installService(profileId: string): Promise<{ success: boolean; message: string; status: { installed: boolean; running: boolean; rawOutput: string; rawError: string } }>;
   removeService(): Promise<{ success: boolean; message: string; status: { installed: boolean; running: boolean; rawOutput: string; rawError: string } }>;
+  getWinwsRuntimeInfo(): Promise<WinwsRuntimeDescriptor>;
+  validateWinwsRuntime(): Promise<WinwsRuntimeDescriptor>;
+  startWinwsRuntime(args?: string[], cwd?: string): Promise<WinwsRuntimeState>;
+  stopWinwsRuntime(): Promise<WinwsRuntimeState>;
+  restartWinwsRuntime(args?: string[], cwd?: string): Promise<WinwsRuntimeState>;
+  getWinwsRuntimeState(): Promise<WinwsRuntimeState>;
 
   minimizeWindow(): Promise<void>;
   maximizeWindow(): Promise<boolean>;
@@ -106,6 +138,12 @@ const electronApi: ElectronAPI = {
   getServiceStatus: () => ipcRenderer.invoke("app:getServiceStatus"),
   installService: (profileId) => ipcRenderer.invoke("app:installService", profileId),
   removeService: () => ipcRenderer.invoke("app:removeService"),
+  getWinwsRuntimeInfo: () => ipcRenderer.invoke("app:getWinwsRuntimeInfo"),
+  validateWinwsRuntime: () => ipcRenderer.invoke("app:validateWinwsRuntime"),
+  startWinwsRuntime: (args, cwd) => ipcRenderer.invoke("app:startWinwsRuntime", args, cwd),
+  stopWinwsRuntime: () => ipcRenderer.invoke("app:stopWinwsRuntime"),
+  restartWinwsRuntime: (args, cwd) => ipcRenderer.invoke("app:restartWinwsRuntime", args, cwd),
+  getWinwsRuntimeState: () => ipcRenderer.invoke("app:getWinwsRuntimeState"),
 
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   maximizeWindow: () => ipcRenderer.invoke("window:maximize"),

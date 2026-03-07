@@ -1,6 +1,6 @@
 ﻿import { useMemo, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Activity, AlertCircle, Clock, CheckCircle2, XCircle } from "lucide-react";
+import { Activity, Clock, CheckCircle2, XCircle } from "lucide-react";
 import { useUiData } from "../hooks/useUiData";
 
 function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
@@ -31,6 +31,7 @@ function inRange(timestamp: string | null, minTs: number): boolean {
 
 export function Analytics() {
   const [timeRange, setTimeRange] = useState<"1h" | "6h" | "24h" | "7d">("24h");
+  const [selectedAltId, setSelectedAltId] = useState<string>("all");
   const { profiles, diagnostics, runtime, summary, switchHistory } = useUiData();
 
   const limitsMs: Record<typeof timeRange, number> = {
@@ -42,8 +43,42 @@ export function Analytics() {
 
   const minTs = Date.now() - limitsMs[timeRange];
 
+  const filteredProfiles = useMemo(() => {
+    if (selectedAltId === "all") {
+      return profiles;
+    }
+    return profiles.filter((profile) => profile.id === selectedAltId);
+  }, [profiles, selectedAltId]);
+
+  const metrics = useMemo(() => {
+    const tested = filteredProfiles.filter((item) => item.lastTestResult !== "not_tested").length;
+    const working = filteredProfiles.filter((item) => item.runtimeStatus === "working" || item.runtimeStatus === "active").length;
+    const failed = filteredProfiles.filter((item) => item.runtimeStatus === "failed").length;
+    const youtubeWorking = filteredProfiles.filter((item) => item.youtubeStatus === "working").length;
+    const discordWorking = filteredProfiles.filter((item) => item.discordStatus === "working").length;
+    const bothWorking = filteredProfiles.filter((item) => item.combinedResult === "both").length;
+
+    const launchSuccess = filteredProfiles.reduce((sum, item) => sum + item.successCount, 0);
+    const launchFail = filteredProfiles.reduce((sum, item) => sum + item.failCount, 0);
+
+    return {
+      totalProfiles: filteredProfiles.length,
+      testedProfiles: tested,
+      workingProfiles: working,
+      failedProfiles: failed,
+      youtubeWorking,
+      discordWorking,
+      bothWorking,
+      launchSuccess,
+      launchFail,
+      switches: switchHistory.filter((entry) => inRange(entry.time, minTs)).length,
+      errors: diagnostics.filter((item) => item.severity === "error" && inRange(item.timestamp, minTs)).length,
+      warnings: diagnostics.filter((item) => item.severity === "warn" && inRange(item.timestamp, minTs)).length,
+    };
+  }, [filteredProfiles, diagnostics, switchHistory, minTs]);
+
   const profileOps = useMemo(() => {
-    return profiles
+    return filteredProfiles
       .map((profile) => ({
         name: profile.name,
         launches: profile.launchCount,
@@ -54,45 +89,22 @@ export function Analytics() {
       }))
       .sort((a, b) => b.launches - a.launches)
       .slice(0, 12);
-  }, [profiles]);
-
-  const metrics = useMemo(() => {
-    const tested = profiles.filter((item) => item.lastTestResult !== "not_tested").length;
-    const working = profiles.filter((item) => item.runtimeStatus === "working" || item.runtimeStatus === "active").length;
-    const failed = profiles.filter((item) => item.runtimeStatus === "failed").length;
-    const youtubeWorking = profiles.filter((item) => item.youtubeStatus === "working").length;
-    const discordWorking = profiles.filter((item) => item.discordStatus === "working").length;
-    const bothWorking = profiles.filter((item) => item.combinedResult === "both").length;
-
-    return {
-      totalProfiles: summary.profileCount,
-      testedProfiles: tested,
-      workingProfiles: working,
-      failedProfiles: failed,
-      youtubeWorking,
-      discordWorking,
-      bothWorking,
-      ipLists: summary.ipListCount,
-      parseErrors: summary.readErrorCount,
-      runtimeRunning: runtime.isRunning ? 1 : 0,
-      switches: switchHistory.filter((entry) => inRange(entry.time, minTs)).length,
-      errors: diagnostics.filter((item) => item.severity === "error" && inRange(item.timestamp, minTs)).length,
-      warnings: diagnostics.filter((item) => item.severity === "warn" && inRange(item.timestamp, minTs)).length,
-    };
-  }, [profiles, diagnostics, runtime.isRunning, summary, switchHistory, minTs]);
+  }, [filteredProfiles]);
 
   const eventsData = useMemo(() => {
     return [
-      { key: "launch_success", value: runtime.launchSuccessCount },
-      { key: "launch_fail", value: runtime.launchFailureCount },
-      { key: "switches", value: runtime.switchCount },
+      { key: "launch_success", value: metrics.launchSuccess },
+      { key: "launch_fail", value: metrics.launchFail },
+      { key: "switches", value: metrics.switches },
       { key: "diag_errors", value: metrics.errors },
       { key: "diag_warnings", value: metrics.warnings },
       { key: "youtube_working", value: metrics.youtubeWorking },
       { key: "discord_working", value: metrics.discordWorking },
       { key: "both_working", value: metrics.bothWorking },
     ];
-  }, [runtime.launchFailureCount, runtime.launchSuccessCount, runtime.switchCount, metrics]);
+  }, [metrics]);
+
+  const empty = filteredProfiles.length === 0;
 
   return (
     <div className="flex flex-col h-full overflow-y-auto app-scroll">
@@ -102,36 +114,56 @@ export function Analytics() {
             Analytics
           </h1>
           <span className="text-[#333333]" style={{ fontSize: "11px", fontFamily: "'JetBrains Mono', monospace" }}>
-            Runtime/Test history and service availability analytics
+            Real runtime and test history
           </span>
         </div>
 
-        <div className="flex items-center gap-1 bg-[#0e0e0e] border border-[#1a1a1a] rounded-md p-1">
-          {(["1h", "6h", "24h", "7d"] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setTimeRange(value)}
-              className={`px-3 py-1.5 rounded transition-all ${timeRange === value ? "bg-white text-black" : "text-[#444444] hover:text-[#888888]"}`}
-              style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 500 }}
-            >
-              {value}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <select
+            value={selectedAltId}
+            onChange={(event) => setSelectedAltId(event.target.value)}
+            className="bg-[#0e0e0e] border border-[#1a1a1a] rounded-md px-3 py-1.5 text-[#cccccc]"
+            style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace" }}
+          >
+            <option value="all">all alts</option>
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>{profile.name}</option>
+            ))}
+          </select>
+
+          <div className="flex items-center gap-1 bg-[#0e0e0e] border border-[#1a1a1a] rounded-md p-1">
+            {(["1h", "6h", "24h", "7d"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setTimeRange(value)}
+                className={`px-3 py-1.5 rounded transition-all ${timeRange === value ? "bg-white text-black" : "text-[#444444] hover:text-[#888888]"}`}
+                style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 500 }}
+              >
+                {value}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       <div className="flex flex-col gap-5 p-6">
+        {empty ? (
+          <div className="px-4 py-3 rounded-lg border border-[#2a2a2a] bg-[#111111] text-[#888888]" style={{ fontSize: "11px" }}>
+            No analytics history for selected alt.
+          </div>
+        ) : null}
+
         <div className="grid grid-cols-8 gap-3">
           {[
-            { label: "Profiles", value: String(metrics.totalProfiles), unit: "total", icon: Activity },
+            { label: "Profiles", value: String(metrics.totalProfiles), unit: selectedAltId === "all" ? "total" : "selected", icon: Activity },
             { label: "Tested", value: String(metrics.testedProfiles), unit: "profiles", icon: CheckCircle2 },
             { label: "Working", value: String(metrics.workingProfiles), unit: "profiles", icon: CheckCircle2 },
             { label: "Failed", value: String(metrics.failedProfiles), unit: "profiles", icon: XCircle },
             { label: "YouTube OK", value: String(metrics.youtubeWorking), unit: "profiles", icon: CheckCircle2 },
             { label: "Discord OK", value: String(metrics.discordWorking), unit: "profiles", icon: CheckCircle2 },
             { label: "Both OK", value: String(metrics.bothWorking), unit: "profiles", icon: CheckCircle2 },
-            { label: "Runtime", value: metrics.runtimeRunning ? "ON" : "OFF", unit: "state", icon: Clock },
+            { label: "Runtime", value: runtime.isRunning ? "ON" : "OFF", unit: runtime.activePid ? `pid ${runtime.activePid}` : "no pid", icon: Clock },
           ].map((item) => (
             <div key={item.label} className="flex flex-col gap-2.5 bg-[#0e0e0e] border border-[#1a1a1a] rounded-lg p-4">
               <div className="flex items-center justify-between">
@@ -184,10 +216,7 @@ export function Analytics() {
               </BarChart>
             </ResponsiveContainer>
             <div className="mt-3 text-[#444444]" style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace" }}>
-              switches in range: {metrics.switches}
-            </div>
-            <div className="text-[#444444]" style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace" }}>
-              parse errors: {metrics.parseErrors}, diagnostics warnings: {metrics.warnings}
+              switches in range: {metrics.switches} | parse errors: {summary.readErrorCount}
             </div>
           </div>
         </div>

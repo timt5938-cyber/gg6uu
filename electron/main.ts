@@ -1,4 +1,4 @@
-﻿import {
+import {
   app,
   BrowserWindow,
   ipcMain,
@@ -16,6 +16,7 @@ import { ChildProcess, spawn, spawnSync } from "node:child_process";
 import { scanReference } from "./analysisEngine";
 import { createLogger } from "./logger";
 import { createSettingsStore, readSettings, updateSettings } from "./settings";
+import { WinwsRuntimeService, type WinwsRuntimeDescriptor, type WinwsRuntimeState } from "./winwsRuntime";
 import type {
   AppState,
   ConnectionStatus,
@@ -75,6 +76,11 @@ const REFERENCE_ROOT = resolveReferenceRoot();
 const settingsStore = createSettingsStore();
 let settings = readSettings(settingsStore);
 const logger = createLogger(settings.logLevel);
+const winwsRuntimeService = new WinwsRuntimeService({
+  projectReferenceRoot: REFERENCE_ROOT,
+  logger,
+  isDev,
+});
 
 let mainWindow: BrowserWindow | null = null;
 let miniWindow: BrowserWindow | null = null;
@@ -396,7 +402,7 @@ function commitAnalysis(result: ReturnType<typeof scanReference>, reason: string
   if (activeStrategyProfileId) {
     appState.profiles = appState.profiles.map((profile) => {
       if (profile.id === activeStrategyProfileId) {
-        return { ...profile, isActive: true, status: "active", runtimeStatus: isTestRun ? "testing" : "active" };
+        return { ...profile, isActive: true, status: "active", runtimeStatus: "active" };
       }
       if (profile.isActive) {
         return { ...profile, isActive: false, status: profile.isAvailable ? "online" : profile.status, runtimeStatus: profile.isWorkingForCurrentUser ? "working" : "stopped" };
@@ -663,7 +669,7 @@ function normalizeWinwsArgs(tokens: string[]): string[] {
   return normalized;
 }
 
-function parseWinwsDirectSpawn(sourceFile: string): { command: string; args: string[]; cwd: string } | null {
+function parseWinwsDirectSpawn(sourceFile: string, runtime: WinwsRuntimeDescriptor): { command: string; args: string[]; cwd: string } | null {
   const ext = path.extname(sourceFile).toLowerCase();
   if (ext !== ".bat" && ext !== ".cmd") {
     return null;
@@ -718,7 +724,7 @@ function parseWinwsDirectSpawn(sourceFile: string): { command: string; args: str
     return null;
   }
 
-  const command = tokens[0];
+  const parsedCommand = tokens[0];
   const args = tokens.slice(1).flatMap((arg) => {
     const normalizedPortFilter = normalizePortFilterArg(arg);
     if (normalizedPortFilter === null) {
@@ -726,12 +732,12 @@ function parseWinwsDirectSpawn(sourceFile: string): { command: string; args: str
     }
     return [normalizedPortFilter];
   });
-  if (!/winws\.exe$/i.test(command)) {
+  if (!/winws\.exe$/i.test(parsedCommand)) {
     return null;
   }
 
   return {
-    command,
+    command: runtime.exePath,
     args,
     cwd: scriptRoot,
   };
@@ -742,9 +748,14 @@ function buildProfileSpawn(profile: Profile): { command: string; args: string[];
   const ext = path.extname(sourceFile).toLowerCase();
 
   if (ext === ".bat" || ext === ".cmd") {
+    const runtime = winwsRuntimeService.getRuntimeInfo();
+    const directWinws = parseWinwsDirectSpawn(sourceFile, runtime);
+    if (directWinws) {
+      return directWinws;
+    }
     return {
       command: "cmd.exe",
-      args: ["/d", "/c", sourceFile],
+      args: ["/d", "/c", `call "${sourceFile}"`],
       cwd,
     };
   }
@@ -852,6 +863,7 @@ function attachStrategyListeners(profile: Profile, proc: ChildProcess, spawnConf
         activeStrategyProcess = null;
         activeStrategyProfileId = null;
         appState.runtime.error = "Elevation was denied or failed";
+        winwsRuntimeService.markStopped(null);
         logger.error("RUNTIME", `[${profile.name}] elevated start failed`);
       }
 
@@ -862,6 +874,7 @@ function attachStrategyListeners(profile: Profile, proc: ChildProcess, spawnConf
 
     logger.error("RUNTIME", `[${profile.name}] process error: ${error.message}`);
     appState.runtime.error = error.message;
+    winwsRuntimeService.markStopped(null);
     appState.logs = logger.entries();
     broadcastState();
   });
@@ -870,6 +883,7 @@ function attachStrategyListeners(profile: Profile, proc: ChildProcess, spawnConf
     const now = new Date().toISOString();
     const normalizedExitCode = typeof code === "number" ? code : -1;
     const wasStopRequested = appState.runtime.stopRequested || testAllCancelRequested;
+    winwsRuntimeService.markStopped(normalizedExitCode);
     const isSuccess = normalizedExitCode === 0;
 
     if (activeStrategyProfileId === profile.id) {
@@ -938,6 +952,8 @@ async function stopActiveProfile(reason = "manual-stop"): Promise<AppState> {
     activeStrategyProfileId = null;
   }
 
+  winwsRuntimeService.markStopped(appState.runtime.lastExitCode);
+
   appState.dpiBypassState = {
     ...appState.dpiBypassState,
     enabled: false,
@@ -986,13 +1002,13 @@ async function startProfile(profileId?: string, reason = "manual-start"): Promis
 
   const rawSourceFile = String(target.sourceFile || "");
   const sourceFile = resolveStrategyPath(rawSourceFile);
-  const winwsPath = path.join(REFERENCE_ROOT, "bin", "winws.exe");
+  const runtimeDescriptor = winwsRuntimeService.validateRuntime();
 
   if (!fs.existsSync(sourceFile)) {
     throw new Error(`Strategy file not found: ${sourceFile}`);
   }
-  if (!fs.existsSync(winwsPath)) {
-    throw new Error(`winws.exe not found: ${winwsPath}`);
+  if (!runtimeDescriptor.isValid) {
+    throw new Error(`winws runtime validation failed: ${runtimeDescriptor.validationErrors.join("; ")}`);
   }
 
   target = applyActiveProfileSelection(target.id, reason);
@@ -1017,7 +1033,8 @@ async function startProfile(profileId?: string, reason = "manual-start"): Promis
   logger.info("RUNTIME", `Command: ${spawnConfig.command}`);
   logger.info("RUNTIME", `Args: ${JSON.stringify(spawnConfig.args)}`);
   logger.info("RUNTIME", `CWD: ${spawnConfig.cwd}`);
-  logger.info("RUNTIME", `winws exists: ${fs.existsSync(winwsPath) ? "yes" : "no"}`);
+  logger.info("RUNTIME", `winws runtime path: ${runtimeDescriptor.exePath}`);
+  logger.info("RUNTIME", `winws resolved from: ${runtimeDescriptor.resolvedFrom}`);
 
   try {
     const proc = spawn(spawnConfig.command, spawnConfig.args, {
@@ -1030,6 +1047,10 @@ async function startProfile(profileId?: string, reason = "manual-start"): Promis
 
     activeStrategyProcess = proc;
     activeStrategyProfileId = target.id;
+
+    if (/winws\.exe$/i.test(spawnConfig.command)) {
+      winwsRuntimeService.bindProcess(proc, runtimeDescriptor);
+    }
 
     const startedAt = new Date().toISOString();
     const isTestRun = reason.startsWith("test");
@@ -1049,7 +1070,7 @@ async function startProfile(profileId?: string, reason = "manual-start"): Promis
 
     appState.profiles = appState.profiles.map((profile) => {
       if (profile.id === target?.id) {
-        return { ...profile, isActive: true, status: "active", runtimeStatus: isTestRun ? "testing" : "active" };
+        return { ...profile, isActive: true, status: "active", runtimeStatus: "active" };
       }
       if (profile.isActive) {
         return { ...profile, isActive: false, status: profile.isAvailable ? "online" : profile.status, runtimeStatus: profile.isWorkingForCurrentUser ? "working" : "stopped" };
@@ -1515,6 +1536,12 @@ function registerIpc(): void {
   ipcMain.handle("app:openReferenceFolder", async () => shell.openPath(REFERENCE_ROOT));
   ipcMain.handle("app:getDpiBypassState", async () => appState.dpiBypassState);
   ipcMain.handle("app:getRuntimeState", async () => appState.runtime);
+  ipcMain.handle("app:getWinwsRuntimeInfo", async () => winwsRuntimeService.getRuntimeInfo());
+  ipcMain.handle("app:validateWinwsRuntime", async () => winwsRuntimeService.validateRuntime());
+  ipcMain.handle("app:startWinwsRuntime", async (_event, args?: string[], cwd?: string) => winwsRuntimeService.startRuntime(args || [], cwd));
+  ipcMain.handle("app:stopWinwsRuntime", async () => winwsRuntimeService.stopRuntime("ipc"));
+  ipcMain.handle("app:restartWinwsRuntime", async (_event, args?: string[], cwd?: string) => winwsRuntimeService.restartRuntime(args || [], cwd));
+  ipcMain.handle("app:getWinwsRuntimeState", async () => winwsRuntimeService.getRuntimeState());
   ipcMain.handle("app:setBypassEnabled", async (_event, enabled: boolean) => setBypassEnabled(Boolean(enabled)));
   ipcMain.handle("app:testAllProfiles", async () => testAllProfiles());
   ipcMain.handle("app:getDiagnostics", async () => appState.diagnostics);
@@ -1694,6 +1721,7 @@ app.on("before-quit", () => {
   }
 
   void stopActiveProfile("app-quit");
+  void winwsRuntimeService.stopRuntime("app-quit");
 
   for (const [altId, proc] of proxyProcesses) {
     logger.info("PROXY", `Terminating proxy process for ${altId} (${proc.pid})`);
@@ -1709,6 +1737,8 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+
+
 
 
 
