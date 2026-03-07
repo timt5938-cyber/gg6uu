@@ -330,6 +330,9 @@ function parseProfileFromFile(file: MutableReferenceFile, content: string, scann
     successCount: 0,
     failCount: 0,
     isWorkingForCurrentUser: false,
+    youtubeStatus: "not_tested",
+    discordStatus: "not_tested",
+    combinedResult: "not_tested",
   };
 }
 
@@ -707,6 +710,9 @@ export function scanReference(referenceRoot: string, options: ScanOptions = {}):
     switchHistory: history.switchHistory,
   };
 }
+
+
+
 
 
 

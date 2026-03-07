@@ -10,9 +10,6 @@ interface UiAltProfile {
   status: "available" | "not_tested" | "testing" | "working" | "failed" | "active" | "stopped";
   isActive: boolean;
   isFavorite: boolean;
-  speed: number;
-  upload: number;
-  latency: number;
   stability: number;
   quality: number;
   load: number;
@@ -21,6 +18,9 @@ interface UiAltProfile {
   successRate: number;
   location: string;
   protocol: string;
+  youtubeStatus: Profile["youtubeStatus"];
+  discordStatus: Profile["discordStatus"];
+  combinedResult: Profile["combinedResult"];
   tag?: "best" | "recommended" | "unstable" | "offline";
 }
 
@@ -30,7 +30,6 @@ function clampNumber(value: number, min: number, max: number): number {
 
 function toAltProfile(profile: Profile): UiAltProfile {
   const normalizedStatus = profile.isActive ? "active" : profile.runtimeStatus;
-  const canShowLive = normalizedStatus === "active";
   const totalRuns = profile.successCount + profile.failCount;
   const successRate = totalRuns > 0 ? clampNumber((profile.successCount / totalRuns) * 100, 0, 100) : 0;
   const load = clampNumber(profile.launchCount * 5, 0, 100);
@@ -53,9 +52,6 @@ function toAltProfile(profile: Profile): UiAltProfile {
     status: normalizedStatus,
     isActive: profile.isActive,
     isFavorite: profile.successCount > 0 && profile.failCount === 0,
-    speed: canShowLive ? profile.downloadSpeed : 0,
-    upload: canShowLive ? profile.uploadSpeed : 0,
-    latency: canShowLive ? profile.latency : 0,
     stability: successRate,
     quality: successRate,
     load,
@@ -64,6 +60,9 @@ function toAltProfile(profile: Profile): UiAltProfile {
     successRate,
     location: profile.routeType.toUpperCase(),
     protocol: profile.bypassMode.toUpperCase(),
+    youtubeStatus: profile.youtubeStatus,
+    discordStatus: profile.discordStatus,
+    combinedResult: profile.combinedResult,
     tag,
   };
 }

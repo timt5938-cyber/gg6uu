@@ -270,6 +270,9 @@ function parseProfileFromFile(file, content, scannedAt) {
     successCount: 0,
     failCount: 0,
     isWorkingForCurrentUser: false,
+    youtubeStatus: "not_tested",
+    discordStatus: "not_tested",
+    combinedResult: "not_tested",
   };
 }
 
@@ -651,5 +654,8 @@ function scanReference(referenceRoot, options = {}) {
 module.exports = {
   scanReference,
 };
+
+
+
 
 

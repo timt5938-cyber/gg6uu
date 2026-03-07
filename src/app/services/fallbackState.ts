@@ -82,6 +82,10 @@ export function createFallbackAppState(): AppState {
       launchSuccessCount: 0,
       launchFailureCount: 0,
       switchCount: 0,
+      activeServiceResults: {
+        youtube: "not_tested",
+        discord: "not_tested",
+      },
     },
     dpiBypassState: {
       enabled: false,
@@ -117,5 +121,6 @@ export function createFallbackAppState(): AppState {
 }
 
 export const defaultRendererSettings = defaultSettings;
+
 
 

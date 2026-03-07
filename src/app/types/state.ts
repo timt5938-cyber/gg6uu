@@ -4,6 +4,8 @@ export type ProfileLastTestResult = "not_tested" | "working" | "failed" | "stopp
 export type ConnectionStatus = "connected" | "degraded" | "disconnected" | "unknown";
 export type DiagnosticSeverity = "info" | "warn" | "error";
 export type LogLevel = "info" | "warn" | "error" | "debug";
+export type ServiceCheckStatus = "not_tested" | "working" | "failed";
+export type CombinedServiceResult = "not_tested" | "both" | "youtube_only" | "discord_only" | "none";
 
 export interface ReferenceFile {
   id: string;
@@ -62,6 +64,9 @@ export interface Profile {
   successCount: number;
   failCount: number;
   isWorkingForCurrentUser: boolean;
+  youtubeStatus: ServiceCheckStatus;
+  discordStatus: ServiceCheckStatus;
+  combinedResult: CombinedServiceResult;
 }
 
 export interface TrafficStats {
@@ -126,6 +131,10 @@ export interface RuntimeState {
   launchSuccessCount: number;
   launchFailureCount: number;
   switchCount: number;
+  activeServiceResults: {
+    youtube: ServiceCheckStatus;
+    discord: ServiceCheckStatus;
+  };
 }
 
 export interface DpiBypassState {
@@ -210,4 +219,3 @@ export interface AppState {
   switchHistory: SwitchHistoryEntry[];
   systemWarnings: string[];
 }
-
