@@ -1,4 +1,6 @@
-export type ProfileStatus = "active" | "online" | "unstable" | "offline" | "error";
+﻿export type ProfileStatus = "active" | "online" | "unstable" | "offline" | "error";
+export type ProfileRuntimeStatus = "available" | "not_tested" | "testing" | "working" | "failed" | "active" | "stopped";
+export type ProfileLastTestResult = "not_tested" | "working" | "failed" | "stopped";
 export type ConnectionStatus = "connected" | "degraded" | "disconnected" | "unknown";
 export type DiagnosticSeverity = "info" | "warn" | "error";
 export type LogLevel = "info" | "warn" | "error" | "debug";
@@ -50,6 +52,16 @@ export interface Profile {
   detectionHints: string[];
   profileClass: string;
   linkedIpLists: string[];
+  runtimeStatus: ProfileRuntimeStatus;
+  lastTestResult: ProfileLastTestResult;
+  lastTestAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastExitCode: number | null;
+  launchCount: number;
+  successCount: number;
+  failCount: number;
+  isWorkingForCurrentUser: boolean;
 }
 
 export interface TrafficStats {
@@ -96,6 +108,24 @@ export interface RuntimeState {
   referenceAvailable: boolean;
   autoRefreshEnabled: boolean;
   watcherActive: boolean;
+  isRunning: boolean;
+  isTesting: boolean;
+  activeProfileId: string | null;
+  activePid: number | null;
+  activeStartedAt: string | null;
+  lastStoppedAt: string | null;
+  lastExitCode: number | null;
+  stopRequested: boolean;
+  testAllInProgress: boolean;
+  testQueue: string[];
+  testResults: Record<string, ProfileLastTestResult>;
+  lastRuntimeError: string | null;
+  lastRuntimeEvent: string | null;
+  lastSuccessfulProfileId: string | null;
+  lastLaunchAt: string | null;
+  launchSuccessCount: number;
+  launchFailureCount: number;
+  switchCount: number;
 }
 
 export interface DpiBypassState {
@@ -180,3 +210,4 @@ export interface AppState {
   switchHistory: SwitchHistoryEntry[];
   systemWarnings: string[];
 }
+

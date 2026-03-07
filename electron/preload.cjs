@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openReferenceFolder: () => invoke("app:openReferenceFolder"),
   getDpiBypassState: () => invoke("app:getDpiBypassState"),
   setBypassEnabled: (enabled) => invoke("app:setBypassEnabled", enabled),
+  testAllProfiles: () => invoke("app:testAllProfiles"),
+  getRuntimeState: () => invoke("app:getRuntimeState"),
   getDiagnostics: () => invoke("app:getDiagnostics"),
   getReferenceSummary: () => invoke("app:getReferenceSummary"),
   getIpLists: () => invoke("app:getIpLists"),
@@ -56,5 +58,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("app:stateUpdated", listener);
   },
 });
+
+
+
 
 

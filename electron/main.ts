@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ChildProcess, exec, spawn, spawnSync } from "node:child_process";
+import { ChildProcess, spawn, spawnSync } from "node:child_process";
 
 import { scanReference } from "./analysisEngine";
 import { createLogger } from "./logger";
@@ -87,6 +87,7 @@ let autoRefreshTimer: NodeJS.Timeout | null = null;
 const proxyProcesses = new Map<string, ChildProcess>();
 let activeStrategyProcess: ChildProcess | null = null;
 let activeStrategyProfileId: string | null = null;
+let testAllCancelRequested = false;
 
 function resolvePreloadPath(): string {
   const cjsPath = path.join(__dirname, "preload.cjs");
@@ -134,6 +135,24 @@ function createEmptyState(currentSettings: SettingsState): AppState {
       referenceAvailable: false,
       autoRefreshEnabled: currentSettings.autoRefresh,
       watcherActive: false,
+      isRunning: false,
+      isTesting: false,
+      activeProfileId: null,
+      activePid: null,
+      activeStartedAt: null,
+      lastStoppedAt: null,
+      lastExitCode: null,
+      stopRequested: false,
+      testAllInProgress: false,
+      testQueue: [],
+      testResults: {},
+      lastRuntimeError: null,
+      lastRuntimeEvent: null,
+      lastSuccessfulProfileId: null,
+      lastLaunchAt: null,
+      launchSuccessCount: 0,
+      launchFailureCount: 0,
+      switchCount: 0,
     },
     dpiBypassState: {
       enabled: false,
@@ -212,6 +231,25 @@ function getProfileById(profileId: string | null): Profile | null {
   return appState.profiles.find((profile) => profile.id === profileId) ?? null;
 }
 
+function mergeRuntimeProfile(scanProfile: Profile, previous?: Profile): Profile {
+  return {
+    ...scanProfile,
+    runtimeStatus: previous?.runtimeStatus ?? (scanProfile.isAvailable ? "not_tested" : "failed"),
+    lastTestResult: previous?.lastTestResult ?? "not_tested",
+    lastTestAt: previous?.lastTestAt ?? null,
+    lastSuccessAt: previous?.lastSuccessAt ?? null,
+    lastFailureAt: previous?.lastFailureAt ?? null,
+    lastExitCode: previous?.lastExitCode ?? null,
+    launchCount: previous?.launchCount ?? 0,
+    successCount: previous?.successCount ?? 0,
+    failCount: previous?.failCount ?? 0,
+    isWorkingForCurrentUser: previous?.isWorkingForCurrentUser ?? false,
+  };
+}
+
+function patchProfile(profileId: string, patch: Partial<Profile>): void {
+  appState.profiles = appState.profiles.map((profile) => (profile.id === profileId ? { ...profile, ...patch } : profile));
+}
 function pushRuntimeTelemetryPoint(): void {
   const timestamp = new Date().toISOString();
   const traffic = appState.trafficStats;
@@ -274,6 +312,9 @@ function applyActiveProfileSelection(profileId: string, reason: string): Profile
   };
 
   appendSwitchHistory(currentActive?.name || null, nextActive.name, reason);
+  if (currentActive?.id !== nextActive.id) {
+    appState.runtime.switchCount += 1;
+  }
 
   if (settings.rememberLastActiveProfile) {
     settings = updateSettings(settingsStore, { preferredProfile: profileId });
@@ -285,7 +326,9 @@ function applyActiveProfileSelection(profileId: string, reason: string): Profile
 
 function commitAnalysis(result: ReturnType<typeof scanReference>, reason: string): void {
   const previousActive = getProfileById(appState.activeProfileId);
-  const nextActiveFromScan = result.profiles.find((profile) => profile.id === result.activeProfileId) || null;
+  const previousProfiles = new Map(appState.profiles.map((profile) => [profile.id, profile]));
+  const mergedProfiles = result.profiles.map((profile) => mergeRuntimeProfile(profile, previousProfiles.get(profile.id)));
+  const nextActiveFromScan = mergedProfiles.find((profile) => profile.id === result.activeProfileId) || null;
 
   if (nextActiveFromScan && previousActive?.id !== nextActiveFromScan.id) {
     appendSwitchHistory(previousActive?.name || null, nextActiveFromScan.name, reason);
@@ -293,16 +336,17 @@ function commitAnalysis(result: ReturnType<typeof scanReference>, reason: string
     appState.switchHistory = result.switchHistory;
   }
 
-  const availableRoutes = result.profiles.map((profile) => profile.id);
-  const fallbackRoute = result.profiles.find((profile) => profile.status === "online") || null;
+  const availableRoutes = mergedProfiles.map((profile) => profile.id);
+  const fallbackRoute = mergedProfiles.find((profile) => profile.status === "online") || null;
 
   const preservedSpeedHistory = appState.speedHistory;
   const preservedStabilityHistory = appState.stabilityHistory;
   const bypassEnabled = appState.dpiBypassState.enabled;
+  const previousRuntime = appState.runtime;
 
   appState = {
     ...appState,
-    profiles: result.profiles,
+    profiles: mergedProfiles,
     activeProfileId: result.activeProfileId,
     referenceIndex: result.referenceIndex,
     diagnostics: result.diagnostics,
@@ -313,21 +357,26 @@ function commitAnalysis(result: ReturnType<typeof scanReference>, reason: string
     systemWarnings: result.warnings,
     settings,
     runtime: {
+      ...previousRuntime,
       loading: false,
       error: null,
       lastAnalysisAt: result.scannedAt,
       referenceAvailable: result.referenceIndex.exists,
       autoRefreshEnabled: settings.autoRefresh,
       watcherActive: Boolean(referenceWatcher),
+      activeProfileId: activeStrategyProfileId,
+      activePid: activeStrategyProcess?.pid ?? null,
+      isRunning: Boolean(activeStrategyProcess),
+      lastRuntimeEvent: `analysis:${reason}`,
     },
     dpiBypassState: {
       enabled: bypassEnabled,
       activeProfileId: result.activeProfileId,
       activeBypassMode: nextActiveFromScan?.bypassMode || null,
       activeRouteType: nextActiveFromScan?.routeType || null,
-      availableScenarios: Array.from(new Set(result.profiles.map((profile) => profile.bypassMode))),
-      healthyProfiles: result.profiles.filter((profile) => profile.healthScore >= 70).length,
-      unstableProfiles: result.profiles.filter((profile) => profile.status === "unstable").length,
+      availableScenarios: Array.from(new Set(mergedProfiles.map((profile) => profile.bypassMode))),
+      healthyProfiles: mergedProfiles.filter((profile) => profile.healthScore >= 70).length,
+      unstableProfiles: mergedProfiles.filter((profile) => profile.status === "unstable").length,
     },
     routingProfileState: {
       activeRouteId: result.activeProfileId,
@@ -347,10 +396,10 @@ function commitAnalysis(result: ReturnType<typeof scanReference>, reason: string
   if (activeStrategyProfileId) {
     appState.profiles = appState.profiles.map((profile) => {
       if (profile.id === activeStrategyProfileId) {
-        return { ...profile, isActive: true, status: "active" };
+        return { ...profile, isActive: true, status: "active", runtimeStatus: isTestRun ? "testing" : "active" };
       }
       if (profile.isActive) {
-        return { ...profile, isActive: false, status: profile.isAvailable ? "online" : profile.status };
+        return { ...profile, isActive: false, status: profile.isAvailable ? "online" : profile.status, runtimeStatus: profile.isWorkingForCurrentUser ? "working" : "stopped" };
       }
       return profile;
     });
@@ -365,6 +414,8 @@ function commitAnalysis(result: ReturnType<typeof scanReference>, reason: string
       activeRouteType: runningProfile?.routeType || null,
     };
     appState.connectionStatus = resolveConnectionStatus(runningProfile, true);
+    appState.runtime.activeProfileId = activeStrategyProfileId;
+    appState.runtime.isRunning = true;
   }
 
   appState.logs = logger.entries();
@@ -406,6 +457,8 @@ async function runScan(reason = "manual"): Promise<AppState> {
       ...appState.runtime,
       loading: false,
       error: message,
+      lastRuntimeError: message,
+      lastRuntimeEvent: "analysis:error",
     };
   }
 
@@ -690,8 +743,8 @@ function buildProfileSpawn(profile: Profile): { command: string; args: string[];
 
   if (ext === ".bat" || ext === ".cmd") {
     return {
-      command: sourceFile,
-      args: [],
+      command: "cmd.exe",
+      args: ["/d", "/s", "/c", `call "${sourceFile}"`],
       cwd,
     };
   }
@@ -814,6 +867,11 @@ function attachStrategyListeners(profile: Profile, proc: ChildProcess, spawnConf
   });
 
   proc.on("exit", (code) => {
+    const now = new Date().toISOString();
+    const normalizedExitCode = typeof code === "number" ? code : -1;
+    const wasStopRequested = appState.runtime.stopRequested || testAllCancelRequested;
+    const isSuccess = normalizedExitCode === 0;
+
     if (activeStrategyProfileId === profile.id) {
       activeStrategyProcess = null;
       activeStrategyProfileId = null;
@@ -829,27 +887,49 @@ function attachStrategyListeners(profile: Profile, proc: ChildProcess, spawnConf
         latencyMs: 0,
         stabilityScore: appState.trafficStats.stabilityScore,
       };
-
-      appState.profiles = appState.profiles.map((item) => {
-        if (item.id === profile.id) {
-          const nextStatus = code === 0 ? "online" : "error";
-          return {
-            ...item,
-            isActive: false,
-            status: item.isAvailable ? nextStatus : "offline",
-          };
-        }
-        return item;
-      });
     }
 
-    logger.info("RUNTIME", `[${profile.name}] exited with code ${code ?? -1}`);
+    const previous = getProfileById(profile.id);
+    patchProfile(profile.id, {
+      isActive: false,
+      status: profile.isAvailable ? (isSuccess ? "online" : "error") : "offline",
+      runtimeStatus: wasStopRequested ? "stopped" : isSuccess ? "working" : "failed",
+      lastTestResult: wasStopRequested ? "stopped" : isSuccess ? "working" : "failed",
+      lastTestAt: now,
+      lastSuccessAt: isSuccess ? now : previous?.lastSuccessAt ?? null,
+      lastFailureAt: !isSuccess && !wasStopRequested ? now : previous?.lastFailureAt ?? null,
+      lastExitCode: normalizedExitCode,
+      successCount: (previous?.successCount ?? 0) + (isSuccess ? 1 : 0),
+      failCount: (previous?.failCount ?? 0) + (!isSuccess && !wasStopRequested ? 1 : 0),
+      isWorkingForCurrentUser: isSuccess || Boolean(previous?.isWorkingForCurrentUser),
+    });
+
+    appState.runtime.lastExitCode = normalizedExitCode;
+    appState.runtime.lastStoppedAt = now;
+    appState.runtime.isRunning = false;
+    appState.runtime.isTesting = false;
+    appState.runtime.activePid = null;
+    appState.runtime.activeProfileId = null;
+    appState.runtime.lastRuntimeEvent = `[${profile.name}] exit:${normalizedExitCode}`;
+
+    if (isSuccess) {
+      appState.runtime.launchSuccessCount += 1;
+      appState.runtime.lastSuccessfulProfileId = profile.id;
+    } else if (!wasStopRequested) {
+      appState.runtime.launchFailureCount += 1;
+      appState.runtime.lastRuntimeError = `[${profile.name}] exit:${normalizedExitCode}`;
+    }
+
+    appState.runtime.stopRequested = false;
+
+    logger.info("RUNTIME", `[${profile.name}] exited with code ${normalizedExitCode}`);
     appState.logs = logger.entries();
     broadcastState();
   });
 }
-
 async function stopActiveProfile(reason = "manual-stop"): Promise<AppState> {
+  appState.runtime.stopRequested = true;
+
   if (activeStrategyProcess) {
     const profileName = getProfileById(activeStrategyProfileId)?.name || activeStrategyProfileId || "unknown";
     logger.info("RUNTIME", `Stopping profile ${profileName} (${reason})`);
@@ -871,22 +951,30 @@ async function stopActiveProfile(reason = "manual-stop"): Promise<AppState> {
   };
 
   appState.profiles = appState.profiles.map((profile) => {
-    if (profile.isActive) {
+    if (profile.id === appState.runtime.activeProfileId || profile.isActive) {
       return {
         ...profile,
         isActive: false,
         status: profile.isAvailable ? "online" : profile.status,
+        runtimeStatus: profile.isWorkingForCurrentUser ? "working" : "stopped",
+        lastTestResult: "stopped",
       };
     }
     return profile;
   });
+
+  appState.runtime.isRunning = false;
+  appState.runtime.isTesting = false;
+  appState.runtime.activePid = null;
+  appState.runtime.activeProfileId = null;
+  appState.runtime.lastStoppedAt = new Date().toISOString();
+  appState.runtime.lastRuntimeEvent = `stop:${reason}`;
 
   appState.logs = logger.entries();
   pushRuntimeTelemetryPoint();
   broadcastState();
   return appState;
 }
-
 async function startProfile(profileId?: string, reason = "manual-start"): Promise<AppState> {
   let target = getProfileById(profileId || appState.activeProfileId);
   if (!target) {
@@ -922,8 +1010,6 @@ async function startProfile(profileId?: string, reason = "manual-start"): Promis
   }
 
   const spawnConfig = buildProfileSpawn(target);
-  const ext = path.extname(sourceFile).toLowerCase();
-  const isBatchProfile = ext === ".bat" || ext === ".cmd";
 
   logger.info("RUNTIME", `Starting profile ${target.name}: ${path.basename(target.sourceFile)}`);
   logger.info("RUNTIME", `sourceFile(raw): ${rawSourceFile}`);
@@ -934,29 +1020,39 @@ async function startProfile(profileId?: string, reason = "manual-start"): Promis
   logger.info("RUNTIME", `winws exists: ${fs.existsSync(winwsPath) ? "yes" : "no"}`);
 
   try {
-    const proc = isBatchProfile
-      ? exec(`"${sourceFile}"`, {
-          cwd: spawnConfig.cwd,
-          windowsHide: true,
-          shell: "cmd.exe",
-        })
-      : spawn(spawnConfig.command, spawnConfig.args, {
-          cwd: spawnConfig.cwd,
-          shell: false,
-          windowsHide: true,
-          stdio: ["ignore", "pipe", "pipe"],
-          detached: false,
-        });
+    const proc = spawn(spawnConfig.command, spawnConfig.args, {
+      cwd: spawnConfig.cwd,
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: false,
+    });
 
     activeStrategyProcess = proc;
     activeStrategyProfileId = target.id;
 
+    const startedAt = new Date().toISOString();
+    const isTestRun = reason.startsWith("test");
+    patchProfile(target.id, {
+      launchCount: target.launchCount + 1,
+      runtimeStatus: isTestRun ? "testing" : "active",
+      lastTestAt: startedAt,
+      isActive: true,
+    });
+    appState.runtime.isRunning = true;
+    appState.runtime.isTesting = isTestRun || appState.runtime.testAllInProgress;
+    appState.runtime.activePid = proc.pid ?? null;
+    appState.runtime.activeProfileId = target.id;
+    appState.runtime.activeStartedAt = startedAt;
+    appState.runtime.lastLaunchAt = startedAt;
+    appState.runtime.lastRuntimeEvent = `start:${target.id}`;
+
     appState.profiles = appState.profiles.map((profile) => {
       if (profile.id === target?.id) {
-        return { ...profile, isActive: true, status: "active" };
+        return { ...profile, isActive: true, status: "active", runtimeStatus: isTestRun ? "testing" : "active" };
       }
       if (profile.isActive) {
-        return { ...profile, isActive: false, status: profile.isAvailable ? "online" : profile.status };
+        return { ...profile, isActive: false, status: profile.isAvailable ? "online" : profile.status, runtimeStatus: profile.isWorkingForCurrentUser ? "working" : "stopped" };
       }
       return profile;
     });
@@ -1006,6 +1102,8 @@ async function setActiveProfile(profileId: string, reason = "manual"): Promise<A
   };
 
   logger.info("ROUTING", `Active profile set to ${profileId}`);
+  appState.runtime.activeProfileId = profileId;
+  appState.runtime.lastRuntimeEvent = `route:${profileId}`;
 
   if (appState.dpiBypassState.enabled) {
     await startProfile(profileId, "switch");
@@ -1017,12 +1115,94 @@ async function setActiveProfile(profileId: string, reason = "manual"): Promise<A
   return appState;
 }
 
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function testAllProfiles(): Promise<AppState> {
+  if (appState.runtime.testAllInProgress) {
+    return appState;
+  }
+
+  const queue = appState.profiles.filter((profile) => profile.isAvailable).map((profile) => profile.id);
+  testAllCancelRequested = false;
+  appState.runtime.testAllInProgress = true;
+  appState.runtime.isTesting = true;
+  appState.runtime.stopRequested = false;
+  appState.runtime.testQueue = [...queue];
+  appState.runtime.testResults = {};
+  appState.runtime.lastRuntimeEvent = "test-all:start";
+  appState.logs = logger.entries();
+  broadcastState();
+
+  for (const profileId of queue) {
+    if (testAllCancelRequested) {
+      break;
+    }
+
+    patchProfile(profileId, {
+      runtimeStatus: "testing",
+      lastTestResult: "not_tested",
+      isActive: true,
+    });
+
+    appState.runtime.activeProfileId = profileId;
+    appState.runtime.testQueue = appState.runtime.testQueue.filter((id) => id !== profileId);
+    appState.runtime.lastRuntimeEvent = `test-all:run:${profileId}`;
+    broadcastState();
+
+    try {
+      await startProfile(profileId, "test-all");
+      await sleep(5000);
+    } catch (error) {
+      logger.warn("RUNTIME", `Test failed to start for ${profileId}: ${error instanceof Error ? error.message : String(error)}`);
+      patchProfile(profileId, {
+        runtimeStatus: "failed",
+        lastTestResult: "failed",
+        lastFailureAt: new Date().toISOString(),
+        failCount: (getProfileById(profileId)?.failCount ?? 0) + 1,
+        isActive: false,
+      });
+      appState.runtime.testResults[profileId] = "failed";
+      continue;
+    }
+
+    if (activeStrategyProfileId === profileId) {
+      await stopActiveProfile("test-all-step");
+    }
+
+    const after = getProfileById(profileId);
+    const result = after?.lastTestResult ?? "stopped";
+    appState.runtime.testResults[profileId] = result;
+    appState.runtime.lastRuntimeEvent = `test-all:done:${profileId}`;
+    appState.logs = logger.entries();
+    broadcastState();
+  }
+
+  appState.runtime.testAllInProgress = false;
+  appState.runtime.isTesting = false;
+  appState.runtime.testQueue = [];
+  appState.runtime.lastRuntimeEvent = testAllCancelRequested ? "test-all:cancelled" : "test-all:finished";
+
+  if (testAllCancelRequested) {
+    logger.warn("RUNTIME", "Test All cancelled by user");
+  }
+
+  testAllCancelRequested = false;
+  appState.logs = logger.entries();
+  broadcastState();
+  return appState;
+}
 async function setBypassEnabled(enabled: boolean): Promise<AppState> {
   if (enabled) {
     return startProfile(appState.activeProfileId || undefined, "start-button");
   }
 
   logger.info("DPI", "Bypass disabled");
+  if (appState.runtime.testAllInProgress) {
+    testAllCancelRequested = true;
+  }
   return stopActiveProfile("stop-button");
 }
 
@@ -1334,7 +1514,9 @@ function registerIpc(): void {
   ipcMain.handle("app:restartAnalysis", async () => runScan("restart"));
   ipcMain.handle("app:openReferenceFolder", async () => shell.openPath(REFERENCE_ROOT));
   ipcMain.handle("app:getDpiBypassState", async () => appState.dpiBypassState);
+  ipcMain.handle("app:getRuntimeState", async () => appState.runtime);
   ipcMain.handle("app:setBypassEnabled", async (_event, enabled: boolean) => setBypassEnabled(Boolean(enabled)));
+  ipcMain.handle("app:testAllProfiles", async () => testAllProfiles());
   ipcMain.handle("app:getDiagnostics", async () => appState.diagnostics);
   ipcMain.handle("app:getReferenceSummary", async () => appState.referenceSummary);
   ipcMain.handle("app:getIpLists", async () => appState.ipLists);
@@ -1527,6 +1709,45 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

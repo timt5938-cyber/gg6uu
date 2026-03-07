@@ -1,28 +1,10 @@
 ﻿import { useMemo, type ComponentType } from "react";
 import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-} from "recharts";
-import {
   Power,
   StopCircle,
   RefreshCw,
   Shuffle,
   FlaskConical,
-  ChevronRight,
-  TrendingUp,
-  Zap,
-  Shield,
-  Activity,
-  ArrowDown,
-  ArrowUp,
-  Clock,
-  Star,
   AlertTriangle,
   CheckCircle2,
 } from "lucide-react";
@@ -31,48 +13,33 @@ import { useAppStore } from "../store/appStore";
 
 const statusText: Record<string, string> = {
   active: "ACTIVE",
-  online: "ONLINE",
-  unstable: "UNSTABLE",
-  offline: "OFFLINE",
-  error: "ERROR",
+  working: "WORKING",
+  testing: "TESTING",
+  available: "AVAILABLE",
+  not_tested: "NOT TESTED",
+  stopped: "STOPPED",
+  failed: "FAILED",
 };
 
 const statusTextColor: Record<string, string> = {
   active: "text-white",
-  online: "text-[#888888]",
-  unstable: "text-[#aa6600]",
-  offline: "text-[#333333]",
-  error: "text-[#aa3333]",
+  working: "text-[#88aa88]",
+  testing: "text-[#aa8833]",
+  available: "text-[#777777]",
+  not_tested: "text-[#555555]",
+  stopped: "text-[#444444]",
+  failed: "text-[#aa3333]",
 };
 
 const statusDotColor: Record<string, string> = {
   active: "bg-white",
-  online: "bg-[#555555]",
-  unstable: "bg-[#8a6500]",
-  offline: "bg-[#2a2a2a]",
-  error: "bg-[#8a2222]",
+  working: "bg-[#6a8a6a]",
+  testing: "bg-[#8a6500]",
+  available: "bg-[#5a5a5a]",
+  not_tested: "bg-[#3a3a3a]",
+  stopped: "bg-[#2a2a2a]",
+  failed: "bg-[#8a2222]",
 };
-
-function CustomTooltip({ active, payload }: { active?: boolean; payload?: Array<{ name: string; value: number }> }) {
-  if (active && payload && payload.length) {
-    return (
-      <div className="bg-[#111111] border border-[#252525] rounded-md p-3">
-        {payload.map((item) => (
-          <div key={item.name} className="flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-white" />
-            <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#888888" }}>
-              {item.name}:
-            </span>
-            <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#e0e0e0" }}>
-              {item.value.toFixed(1)} {item.name === "latency" ? "ms" : "Mbps"}
-            </span>
-          </div>
-        ))}
-      </div>
-    );
-  }
-  return null;
-}
 
 function ActionButton({
   icon: Icon,
@@ -108,65 +75,80 @@ function ActionButton({
   );
 }
 
+function formatTs(value: string | null): string {
+  if (!value) {
+    return "n/a";
+  }
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    return value;
+  }
+  return new Date(parsed).toLocaleString();
+}
+
 export function Dashboard() {
-  const { altProfiles, activeAlt, speedHistory, switchHistory, diagnostics, ipLists, runtime, summary } = useUiData();
+  const { altProfiles, activeAlt, runtime, summary, profiles, diagnostics } = useUiData();
   const loading = useAppStore((state) => state.loading);
   const error = useAppStore((state) => state.error);
-  const refresh = useAppStore((state) => state.refresh);
   const restartAnalysis = useAppStore((state) => state.restartAnalysis);
   const setActiveProfile = useAppStore((state) => state.setActiveProfile);
   const setBypassEnabled = useAppStore((state) => state.setBypassEnabled);
+  const testAllProfiles = useAppStore((state) => state.testAllProfiles);
 
-  const chartData = useMemo(() => speedHistory.slice(0, 30).reverse(), [speedHistory]);
-  const onlineProfiles = useMemo(
-    () => altProfiles.filter((item) => item.status === "active" || item.status === "online" || item.status === "unstable"),
-    [altProfiles],
-  );
+  const isRunning = runtime.isRunning;
 
-  const isRunning = Boolean(activeAlt) && summary.dataAvailable;
+  const stats = useMemo(() => {
+    const testedProfiles = profiles.filter((item) => item.lastTestResult !== "not_tested").length;
+    const workingProfiles = profiles.filter((item) => item.runtimeStatus === "working" || item.runtimeStatus === "active").length;
+    const failedProfiles = profiles.filter((item) => item.runtimeStatus === "failed").length;
+    const launchErrors = diagnostics.filter((d) => d.severity === "error").length;
 
-  const testActiveAlt = async () => {
-    if (!activeAlt) {
-      return;
-    }
-    await setActiveProfile(activeAlt.id);
-    await setBypassEnabled(true);
-  };
+    return [
+      { label: "Runtime", value: runtime.isRunning ? "ENABLED" : "DISABLED" },
+      { label: "Active ALT", value: activeAlt?.name ?? "n/a" },
+      { label: "Last success profile", value: runtime.lastSuccessfulProfileId ?? "n/a" },
+      { label: "Last launch", value: formatTs(runtime.lastLaunchAt) },
+      { label: "Last stop", value: formatTs(runtime.lastStoppedAt) },
+      { label: "Profiles found", value: String(summary.profileCount) },
+      { label: "Profiles tested", value: String(testedProfiles) },
+      { label: "Profiles working", value: String(workingProfiles) },
+      { label: "Profiles failed", value: String(failedProfiles) },
+      { label: "IP lists found", value: String(summary.ipListCount) },
+      { label: "Reference", value: runtime.referenceAvailable ? "AVAILABLE" : "UNAVAILABLE" },
+      { label: "Process", value: runtime.activePid ? `PID ${runtime.activePid}` : "STOPPED" },
+      { label: "Launch success", value: String(runtime.launchSuccessCount) },
+      { label: "Launch fail", value: String(runtime.launchFailureCount) },
+      { label: "Switches", value: String(runtime.switchCount) },
+      { label: "Launch errors", value: String(launchErrors) },
+      { label: "Last analysis", value: formatTs(runtime.lastAnalysisAt) },
+      { label: "Last runtime event", value: runtime.lastRuntimeEvent ?? "n/a" },
+    ];
+  }, [profiles, runtime, summary.ipListCount, summary.profileCount, diagnostics, activeAlt?.name]);
 
   const switchToNext = async () => {
-    if (!activeAlt || onlineProfiles.length <= 1) {
+    if (!activeAlt || altProfiles.length <= 1) {
       return;
     }
-    const currentIndex = onlineProfiles.findIndex((item) => item.id === activeAlt.id);
-    const nextIndex = (currentIndex + 1) % onlineProfiles.length;
-    await setActiveProfile(onlineProfiles[nextIndex].id);
+    const currentIndex = altProfiles.findIndex((item) => item.id === activeAlt.id);
+    const nextIndex = (currentIndex + 1) % altProfiles.length;
+    await setActiveProfile(altProfiles[nextIndex].id);
   };
-
-  const recommendationList = useMemo(() => {
-    return [...altProfiles]
-      .filter((profile) => profile.status !== "offline" && profile.status !== "error")
-      .sort((a, b) => b.quality + b.stability - (a.quality + a.stability))
-      .slice(0, 3);
-  }, [altProfiles]);
 
   return (
     <div className="flex h-full overflow-hidden">
       <div className="flex-1 flex flex-col overflow-y-auto app-scroll p-6 gap-5">
         <div className="flex items-center justify-between">
           <div className="flex flex-col gap-0.5">
-            <h1
-              className="text-white"
-              style={{ fontFamily: "'Inter', sans-serif", fontWeight: 300, letterSpacing: "-0.02em", fontSize: "20px" }}
-            >
+            <h1 className="text-white" style={{ fontFamily: "'Inter', sans-serif", fontWeight: 300, letterSpacing: "-0.02em", fontSize: "20px" }}>
               Dashboard
             </h1>
             <span className="text-[#333333]" style={{ fontSize: "11px", fontFamily: "'JetBrains Mono', monospace" }}>
-              {runtime.referenceAvailable ? "Reference linked" : "Reference unavailable"} Р’В· Last update: {runtime.lastAnalysisAt || "n/a"}
+              Operational state for DPI runtime and reference analysis
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <ActionButton icon={FlaskConical} label="Test Alt" onClick={() => void testActiveAlt()} disabled={loading || !activeAlt} />
-            <ActionButton icon={Shuffle} label="Switch Alt" onClick={() => void switchToNext()} disabled={loading || onlineProfiles.length < 2} />
+            <ActionButton icon={FlaskConical} label="Test All" onClick={() => void testAllProfiles()} disabled={loading || altProfiles.length === 0} />
+            <ActionButton icon={Shuffle} label="Switch Alt" onClick={() => void switchToNext()} disabled={loading || altProfiles.length < 2} />
             <ActionButton icon={RefreshCw} label="Restart" onClick={() => void restartAnalysis()} disabled={loading} />
             {isRunning ? (
               <ActionButton icon={StopCircle} label="Stop" variant="danger" onClick={() => void setBypassEnabled(false)} disabled={loading} />
@@ -182,287 +164,106 @@ export function Dashboard() {
           </div>
         )}
 
-        <div className="relative bg-[#0e0e0e] border border-[#1e1e1e] rounded-xl p-6 overflow-hidden">
-          <div className="absolute inset-0 opacity-[0.02]" style={{ backgroundImage: "radial-gradient(circle at 100% 0%, white 0%, transparent 50%)" }} />
-          <div className="flex items-start gap-8 relative">
-            <div className="flex flex-col gap-2 min-w-[240px]">
-              <span className="text-[#333333] uppercase tracking-[0.15em]" style={{ fontSize: "9px", fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
-                Active Profile
-              </span>
-              <div className="flex items-baseline gap-3">
-                <span className="text-white" style={{ fontFamily: "'Inter', sans-serif", fontWeight: 200, letterSpacing: "-0.03em", fontSize: "52px", lineHeight: 1 }}>
-                  {activeAlt?.name || "N/A"}
-                </span>
+        <div className="grid grid-cols-3 gap-3">
+          {stats.map((item) => (
+            <div key={item.label} className="bg-[#0e0e0e] border border-[#1e1e1e] rounded-lg px-4 py-3">
+              <div className="text-[#3a3a3a] uppercase tracking-[0.08em]" style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
+                {item.label}
               </div>
-              <div className="flex items-center gap-2 mt-1">
-                <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm ${isRunning ? "bg-white" : "bg-[#1a1a1a] border border-[#2a2a2a]"}`}>
-                  <div className={`w-1.5 h-1.5 rounded-full ${isRunning ? "bg-black animate-pulse" : "bg-[#333333]"}`} />
-                  <span
-                    style={{
-                      fontSize: "9px",
-                      fontFamily: "'Inter', sans-serif",
-                      fontWeight: 700,
-                      letterSpacing: "0.15em",
-                      color: isRunning ? "#000" : "#444444",
-                    }}
-                  >
-                    {isRunning ? "ACTIVE" : "STOPPED"}
-                  </span>
-                </div>
-                <span className="text-[#333333]" style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace" }}>
-                  {activeAlt?.protocol || "-"} Р’В· {activeAlt?.location || "-"}
-                </span>
+              <div className="text-white mt-1" style={{ fontSize: "12px", fontFamily: "'JetBrains Mono', monospace" }}>
+                {item.value}
               </div>
             </div>
-
-            <div className="w-px h-24 bg-[#1a1a1a] self-center" />
-
-            <div className="grid grid-cols-3 gap-6 flex-1">
-              {[
-                { label: "Download", value: activeAlt?.speed ?? 0, unit: "Mbps", icon: ArrowDown, max: 1000 },
-                { label: "Upload", value: activeAlt?.upload ?? 0, unit: "Mbps", icon: ArrowUp, max: 600 },
-                { label: "Latency", value: activeAlt?.latency ?? 0, unit: "ms", icon: Zap, max: 250 },
-                { label: "Stability", value: activeAlt?.stability ?? 0, unit: "%", icon: Shield, max: 100 },
-                { label: "Quality", value: activeAlt?.quality ?? 0, unit: "%", icon: Activity, max: 100 },
-                { label: "Load", value: activeAlt?.load ?? 0, unit: "%", icon: TrendingUp, max: 100 },
-              ].map((metric) => (
-                <div key={metric.label} className="flex flex-col gap-1">
-                  <div className="flex items-center gap-1.5">
-                    <metric.icon size={10} className="text-[#333333]" />
-                    <span className="text-[#3a3a3a] uppercase tracking-[0.1em]" style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
-                      {metric.label}
-                    </span>
-                  </div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-white" style={{ fontFamily: "'Inter', sans-serif", fontWeight: 300, fontSize: "20px", letterSpacing: "-0.02em" }}>
-                      {metric.value.toFixed(metric.unit === "ms" ? 0 : 1)}
-                    </span>
-                    <span className="text-[#333333]" style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace" }}>
-                      {metric.unit}
-                    </span>
-                  </div>
-                  <div className="h-px bg-[#1a1a1a] rounded-full overflow-hidden">
-                    <div className="h-full bg-white rounded-full" style={{ width: `${Math.max(0, Math.min(100, (metric.value / metric.max) * 100))}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex flex-col items-center justify-center gap-2 pl-4">
-              <div className="relative w-20 h-20">
-                <svg viewBox="0 0 80 80" className="w-full h-full -rotate-90">
-                  <circle cx="40" cy="40" r="34" fill="none" stroke="#1a1a1a" strokeWidth="4" />
-                  <circle
-                    cx="40"
-                    cy="40"
-                    r="34"
-                    fill="none"
-                    stroke="white"
-                    strokeWidth="4"
-                    strokeDasharray={`${2 * Math.PI * 34}`}
-                    strokeDashoffset={`${2 * Math.PI * 34 * (1 - (activeAlt?.successRate || 0) / 100)}`}
-                    strokeLinecap="round"
-                  />
-                </svg>
-                <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="text-white" style={{ fontFamily: "'Inter', sans-serif", fontWeight: 300, fontSize: "16px" }}>
-                    {(activeAlt?.successRate || 0).toFixed(0)}%
-                  </span>
-                </div>
-              </div>
-              <span className="text-[#333333] uppercase tracking-[0.1em] text-center" style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
-                Success
-                <br />Rate
-              </span>
-            </div>
-          </div>
+          ))}
         </div>
 
         <div className="bg-[#0e0e0e] border border-[#1e1e1e] rounded-xl p-5">
-          <div className="flex items-center justify-between mb-5">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-white" style={{ fontSize: "12px", fontFamily: "'Inter', sans-serif", fontWeight: 500, letterSpacing: "0.02em" }}>
-                Connection Activity
-              </span>
-              <span className="text-[#333333]" style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace" }}>
-                Real-time throughput Р’В· {activeAlt?.name || "N/A"}
-              </span>
-            </div>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-white" style={{ fontSize: "12px", fontFamily: "'Inter', sans-serif", fontWeight: 500, letterSpacing: "0.02em" }}>
+              Profile Runtime Results
+            </span>
           </div>
-          <ResponsiveContainer width="100%" height={180}>
-            <AreaChart data={chartData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-              <defs>
-                <linearGradient id="dlGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="white" stopOpacity={0.08} />
-                  <stop offset="100%" stopColor="white" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="ulGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#555555" stopOpacity={0.1} />
-                  <stop offset="100%" stopColor="#555555" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="#141414" strokeDasharray="0" vertical={false} />
-              <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#333333", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} interval={4} />
-              <YAxis tick={{ fontSize: 9, fill: "#333333", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} />
-              <Tooltip content={<CustomTooltip />} />
-              <Area type="monotone" dataKey="download" name="download" stroke="white" strokeWidth={1} fill="url(#dlGrad)" dot={false} />
-              <Area type="monotone" dataKey="upload" name="upload" stroke="#555555" strokeWidth={1} fill="url(#ulGrad)" dot={false} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="grid grid-cols-2 gap-5">
-          <div className="bg-[#0e0e0e] border border-[#1e1e1e] rounded-xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-white" style={{ fontSize: "12px", fontFamily: "'Inter', sans-serif", fontWeight: 500, letterSpacing: "0.02em" }}>
-                Switch History
-              </span>
-              <Clock size={12} className="text-[#2a2a2a]" />
-            </div>
-            <div className="flex flex-col gap-0">
-              {switchHistory.slice(0, 6).map((entry, index) => (
-                <div key={`${entry.time}-${index}`} className="flex items-center gap-3 py-2.5 border-b border-[#141414] last:border-0">
-                  <span className="text-[#2a2a2a] w-28 shrink-0" style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace" }}>
-                    {entry.time}
-                  </span>
-                  <div className="flex items-center gap-2 flex-1">
-                    <span className="text-[#444444]" style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace" }}>{entry.from}</span>
-                    <ChevronRight size={9} className="text-[#2a2a2a]" />
-                    <span className="text-white" style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace" }}>{entry.to}</span>
-                    <span className="ml-auto text-[#2a2a2a]" style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace" }}>{entry.reason}</span>
-                  </div>
-                  <span className="text-[#2a2a2a] w-8 text-right shrink-0" style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace" }}>
-                    {entry.duration}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="bg-[#0e0e0e] border border-[#1e1e1e] rounded-xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-white" style={{ fontSize: "12px", fontFamily: "'Inter', sans-serif", fontWeight: 500, letterSpacing: "0.02em" }}>
-                Recommendations
-              </span>
-              <CheckCircle2 size={12} className="text-[#2a2a2a]" />
-            </div>
-            <div className="flex flex-col gap-2">
-              {recommendationList.map((profile, index) => (
-                <button
-                  key={profile.id}
-                  type="button"
-                  onClick={() => void setActiveProfile(profile.id)}
-                  className="flex items-center gap-4 bg-[#0e0e0e] border border-[#1a1a1a] rounded-md px-4 py-3 hover:border-[#252525] transition-colors text-left"
-                >
-                  <div className="flex flex-col items-center gap-0.5 w-10">
-                    <span className="text-[#333333] uppercase" style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.1em" }}>
-                      {index === 0 ? "BEST" : index === 1 ? "FAST" : "STABLE"}
-                    </span>
-                    <span className="text-white" style={{ fontSize: "14px", fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
-                      {profile.name}
-                    </span>
-                  </div>
-                  <div className="w-px h-8 bg-[#1e1e1e]" />
-                  <div className="flex flex-col gap-0.5 flex-1">
-                    <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#666666" }}>
-                      {profile.speed.toFixed(1)} Mbps Р’В· {profile.latency}ms Р’В· {profile.stability}% stable
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
+          <div className="flex flex-col gap-2">
+            {profiles.slice(0, 12).map((profile) => (
+              <div key={profile.id} className="flex items-center gap-3 py-2 border-b border-[#161616] last:border-0">
+                <div className={`w-1.5 h-1.5 rounded-full ${statusDotColor[profile.isActive ? "active" : profile.runtimeStatus] || "bg-[#2a2a2a]"}`} />
+                <span className="text-white" style={{ fontSize: "11px", fontFamily: "'Inter', sans-serif" }}>{profile.name}</span>
+                <span className={`${statusTextColor[profile.isActive ? "active" : profile.runtimeStatus] || "text-[#555555]"} ml-auto`} style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace" }}>
+                  {statusText[profile.isActive ? "active" : profile.runtimeStatus] || profile.runtimeStatus.toUpperCase()}
+                </span>
+                <span className="text-[#555555]" style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace" }}>
+                  launches: {profile.launchCount} / ok: {profile.successCount} / fail: {profile.failCount}
+                </span>
+                <span className="text-[#444444]" style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace" }}>
+                  last: {formatTs(profile.lastTestAt)}
+                </span>
+              </div>
+            ))}
+            {profiles.length === 0 && (
+              <div className="text-[#444444]" style={{ fontSize: "11px" }}>No profiles found in reference.</div>
+            )}
           </div>
         </div>
       </div>
 
-      <div className="w-[260px] shrink-0 border-l border-[#151515] bg-[#090909] flex flex-col overflow-y-auto app-scroll">
-        <div className="p-5 border-b border-[#151515]">
-          <span className="text-[#2a2a2a] uppercase tracking-[0.15em]" style={{ fontSize: "9px", fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
+      <div className="w-[280px] border-l border-[#161616] bg-[#090909] p-4 overflow-y-auto app-scroll shrink-0">
+        <div className="mb-4">
+          <span className="text-[#2a2a2a] uppercase tracking-[0.12em]" style={{ fontSize: "9px", fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
             Live Metrics
           </span>
         </div>
 
-        <div className="flex flex-col p-4 gap-2">
+        <div className="flex flex-col gap-2.5">
           {altProfiles.map((alt) => (
             <button
               key={alt.id}
               type="button"
               onClick={() => void setActiveProfile(alt.id)}
-              className={`flex flex-col gap-2 p-3 rounded-md border transition-colors text-left ${
-                alt.isActive
-                  ? "border-[#252525] bg-[#111111]"
-                  : "border-[#141414] bg-[#0c0c0c] hover:border-[#1e1e1e]"
-              }`}
+              className={`w-full text-left rounded-lg border px-3 py-3 transition-all ${alt.isActive ? "border-[#2a2a2a] bg-[#111111]" : "border-[#1a1a1a] bg-[#0b0b0b] hover:border-[#252525]"}`}
             >
-              <div className="flex items-center gap-2">
-                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDotColor[alt.status] || "bg-[#2a2a2a]"}`} />
-                <span className="text-white flex-1" style={{ fontSize: "11px", fontFamily: "'Inter', sans-serif", fontWeight: alt.isActive ? 600 : 400 }}>
-                  {alt.name}
-                </span>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2">
+                  <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDotColor[alt.status] || "bg-[#2a2a2a]"}`} />
+                  <span className="text-white" style={{ fontSize: "12px", fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
+                    {alt.name}
+                  </span>
+                </div>
                 <span className={statusTextColor[alt.status] || "text-[#555555]"} style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.1em" }}>
                   {statusText[alt.status] || alt.status.toUpperCase()}
                 </span>
               </div>
-              {alt.status !== "offline" && alt.status !== "error" ? (
-                <div className="flex items-center gap-3 pl-3.5">
-                  <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: "#383838" }}>
-                    РІвЂ вЂњ{alt.speed.toFixed(0)}
-                  </span>
-                  <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: "#2e2e2e" }}>
-                    РІвЂ вЂ{alt.upload.toFixed(0)}
-                  </span>
-                  <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: "#2e2e2e" }}>
-                    {alt.latency}ms
+
+              <div className="flex items-center gap-3">
+                <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: "#444444" }}>
+                  launches {profiles.find((item) => item.id === alt.id)?.launchCount ?? 0}
+                </span>
+                <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: "#444444" }}>
+                  ok {profiles.find((item) => item.id === alt.id)?.successCount ?? 0}
+                </span>
+                <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: "#444444" }}>
+                  fail {profiles.find((item) => item.id === alt.id)?.failCount ?? 0}
+                </span>
+              </div>
+
+              {alt.status === "failed" ? (
+                <div className="mt-2 flex items-center gap-1">
+                  <AlertTriangle size={9} className="text-[#4a1a1a]" />
+                  <span style={{ fontSize: "8px", fontFamily: "'JetBrains Mono', monospace", color: "#5a2a2a" }}>
+                    Last test failed
                   </span>
                 </div>
-              ) : (
-                <div className="flex items-center gap-1.5 pl-3.5">
-                  <AlertTriangle size={9} className={alt.status === "error" ? "text-[#4a1a1a]" : "text-[#2a2a2a]"} />
-                  <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: "#2e2e2e" }}>
-                    {alt.lastCheck}
+              ) : alt.status === "working" || alt.status === "active" ? (
+                <div className="mt-2 flex items-center gap-1">
+                  <CheckCircle2 size={9} className="text-[#2f4f2f]" />
+                  <span style={{ fontSize: "8px", fontFamily: "'JetBrains Mono', monospace", color: "#4c6c4c" }}>
+                    Working for current user
                   </span>
                 </div>
-              )}
+              ) : null}
             </button>
           ))}
-        </div>
-
-        <div className="mt-auto p-5 border-t border-[#151515]">
-          <div className="flex flex-col gap-3">
-            <span className="text-[#2a2a2a] uppercase tracking-[0.15em]" style={{ fontSize: "9px", fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
-              Diagnostics
-            </span>
-            <div className="flex items-center justify-between">
-              <span style={{ fontSize: "10px", fontFamily: "'Inter', sans-serif", color: "#333333" }}>Profiles</span>
-              <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#555555" }}>{summary.profileCount}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span style={{ fontSize: "10px", fontFamily: "'Inter', sans-serif", color: "#333333" }}>IP Lists</span>
-              <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#555555" }}>{summary.ipListCount}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span style={{ fontSize: "10px", fontFamily: "'Inter', sans-serif", color: "#333333" }}>Read Errors</span>
-              <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#555555" }}>{summary.readErrorCount}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span style={{ fontSize: "10px", fontFamily: "'Inter', sans-serif", color: "#333333" }}>List Warnings</span>
-              <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#555555" }}>
-                {ipLists.reduce((acc, item) => acc + item.parseWarnings.length, 0)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span style={{ fontSize: "10px", fontFamily: "'Inter', sans-serif", color: "#333333" }}>Critical Diagnostics</span>
-              <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#555555" }}>
-                {diagnostics.filter((diag) => diag.severity === "error").length}
-              </span>
-            </div>
-          </div>
         </div>
       </div>
     </div>
   );
 }
-
-
-
-

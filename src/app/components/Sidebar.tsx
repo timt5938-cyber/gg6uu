@@ -1,4 +1,4 @@
-import { NavLink, useNavigate } from "react-router";
+﻿import { NavLink, useNavigate } from "react-router";
 import {
   LayoutDashboard,
   Layers,
@@ -25,7 +25,7 @@ export function Sidebar() {
   const { altProfiles, diagnostics } = useUiData();
 
   const activeProfile = altProfiles.find((profile) => profile.isActive) ?? altProfiles[0] ?? null;
-  const onlineCount = altProfiles.filter((profile) => profile.status === "active" || profile.status === "online").length;
+  const onlineCount = altProfiles.filter((profile) => profile.status === "active" || profile.status === "working" || profile.status === "testing").length;
 
   return (
     <div className="flex flex-col w-[72px] bg-[#080808] border-r border-[#181818] h-full shrink-0 overflow-hidden transition-all duration-300 hover:w-[220px] group">
@@ -133,3 +133,4 @@ export function Sidebar() {
     </div>
   );
 }
+

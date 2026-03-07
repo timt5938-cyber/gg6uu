@@ -1,18 +1,6 @@
 ﻿import { useMemo, useState } from "react";
-import {
-  AreaChart,
-  Area,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-} from "recharts";
-import { Activity, TrendingUp, Zap, Shield, AlertCircle, Clock } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { Activity, AlertCircle, Clock, CheckCircle2, XCircle } from "lucide-react";
 import { useUiData } from "../hooks/useUiData";
 
 function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
@@ -27,7 +15,7 @@ function CustomTooltip({ active, payload, label }: { active?: boolean; payload?:
         <div key={item.name} className="flex items-center gap-2">
           <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: item.color || "white" }} />
           <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#e0e0e0" }}>
-            {item.name}: {typeof item.value === "number" ? item.value.toFixed(1) : item.value}
+            {item.name}: {typeof item.value === "number" ? item.value.toFixed(0) : item.value}
           </span>
         </div>
       ))}
@@ -35,76 +23,89 @@ function CustomTooltip({ active, payload, label }: { active?: boolean; payload?:
   );
 }
 
+function inRange(timestamp: string | null, minTs: number): boolean {
+  if (!timestamp) {
+    return false;
+  }
+  const parsed = Date.parse(timestamp);
+  return !Number.isNaN(parsed) && parsed >= minTs;
+}
+
 export function Analytics() {
-  const [timeRange, setTimeRange] = useState<"1h" | "6h" | "24h" | "7d">("1h");
-  const { altProfiles, speedHistory, stabilityHistory, diagnostics } = useUiData();
+  const [timeRange, setTimeRange] = useState<"1h" | "6h" | "24h" | "7d">("24h");
+  const { profiles, diagnostics, runtime, summary, switchHistory } = useUiData();
 
-  const chartData = useMemo(() => {
-    const limits: Record<typeof timeRange, number> = { "1h": 60, "6h": 360, "24h": 1440, "7d": 10080 };
-    const limit = limits[timeRange];
-    return speedHistory.slice(0, Math.min(limit, speedHistory.length)).reverse();
-  }, [speedHistory, timeRange]);
+  const limitsMs: Record<typeof timeRange, number> = {
+    "1h": 1 * 60 * 60 * 1000,
+    "6h": 6 * 60 * 60 * 1000,
+    "24h": 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+  };
 
-  const stabilityData = useMemo(() => {
-    const limits: Record<typeof timeRange, number> = { "1h": 60, "6h": 360, "24h": 1440, "7d": 10080 };
-    const limit = limits[timeRange];
-    return stabilityHistory.slice(0, Math.min(limit, stabilityHistory.length)).reverse();
-  }, [stabilityHistory, timeRange]);
+  const minTs = Date.now() - limitsMs[timeRange];
 
-  const stat = useMemo(() => {
-    const online = altProfiles.filter((profile) => profile.status !== "offline" && profile.status !== "error");
-    const avg = (values: number[]) => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0);
+  const profileOps = useMemo(() => {
+    return profiles
+      .map((profile) => {
+        const total = profile.successCount + profile.failCount;
+        const successRate = total > 0 ? Math.round((profile.successCount / total) * 100) : 0;
+        const failRate = total > 0 ? Math.round((profile.failCount / total) * 100) : 0;
+
+        return {
+          name: profile.name,
+          launches: profile.launchCount,
+          successRate,
+          failRate,
+          success: profile.successCount,
+          fail: profile.failCount,
+        };
+      })
+      .sort((a, b) => b.launches - a.launches)
+      .slice(0, 12);
+  }, [profiles]);
+
+  const metrics = useMemo(() => {
+    const tested = profiles.filter((item) => item.lastTestResult !== "not_tested").length;
+    const working = profiles.filter((item) => item.runtimeStatus === "working" || item.runtimeStatus === "active").length;
+    const failed = profiles.filter((item) => item.runtimeStatus === "failed").length;
+    const unstable = profiles.filter((item) => item.runtimeStatus === "stopped").length;
+    const lastSuccess = profiles
+      .map((p) => p.lastSuccessAt)
+      .filter((v): v is string => Boolean(v))
+      .sort()
+      .at(-1) ?? "n/a";
+    const lastFail = profiles
+      .map((p) => p.lastFailureAt)
+      .filter((v): v is string => Boolean(v))
+      .sort()
+      .at(-1) ?? "n/a";
 
     return {
-      avgDownload: avg(online.map((item) => item.speed)),
-      avgUpload: avg(online.map((item) => item.upload)),
-      avgLatency: avg(online.map((item) => item.latency)),
-      avgStability: avg(online.map((item) => item.stability)),
-      errors: diagnostics.filter((item) => item.severity === "error").length,
-      warnings: diagnostics.filter((item) => item.severity === "warn").length,
+      totalProfiles: summary.profileCount,
+      testedProfiles: tested,
+      workingProfiles: working,
+      failedProfiles: failed,
+      unstableProfiles: unstable,
+      ipLists: summary.ipListCount,
+      parseErrors: summary.readErrorCount,
+      runtimeRunning: runtime.isRunning ? 1 : 0,
+      switches: switchHistory.filter((entry) => inRange(entry.time, minTs)).length,
+      errors: diagnostics.filter((item) => item.severity === "error" && inRange(item.timestamp, minTs)).length,
+      warnings: diagnostics.filter((item) => item.severity === "warn" && inRange(item.timestamp, minTs)).length,
+      lastSuccess,
+      lastFail,
     };
-  }, [altProfiles, diagnostics]);
+  }, [profiles, diagnostics, runtime.isRunning, summary, switchHistory, minTs]);
 
   const eventsData = useMemo(() => {
-    const points = [
-      { day: "Mon", errors: 0, warnings: 0 },
-      { day: "Tue", errors: 0, warnings: 0 },
-      { day: "Wed", errors: 0, warnings: 0 },
-      { day: "Thu", errors: 0, warnings: 0 },
-      { day: "Fri", errors: 0, warnings: 0 },
-      { day: "Sat", errors: 0, warnings: 0 },
-      { day: "Sun", errors: 0, warnings: 0 },
+    return [
+      { key: "launch_success", value: runtime.launchSuccessCount },
+      { key: "launch_fail", value: runtime.launchFailureCount },
+      { key: "switches", value: runtime.switchCount },
+      { key: "diag_errors", value: metrics.errors },
+      { key: "diag_warnings", value: metrics.warnings },
     ];
-
-    const limitsMs: Record<typeof timeRange, number> = {
-      "1h": 1 * 60 * 60 * 1000,
-      "6h": 6 * 60 * 60 * 1000,
-      "24h": 24 * 60 * 60 * 1000,
-      "7d": 7 * 24 * 60 * 60 * 1000,
-    };
-
-    const now = Date.now();
-    const minTs = now - limitsMs[timeRange];
-
-    diagnostics.forEach((diag) => {
-      const ts = Date.parse(diag.timestamp);
-      if (Number.isNaN(ts) || ts < minTs) {
-        return;
-      }
-
-      const day = new Date(ts).getDay();
-      const index = day === 0 ? 6 : day - 1;
-      const bucket = points[index];
-
-      if (diag.severity === "error") {
-        bucket.errors += 1;
-      } else if (diag.severity === "warn") {
-        bucket.warnings += 1;
-      }
-    });
-
-    return points;
-  }, [diagnostics, timeRange]);
+  }, [runtime.launchFailureCount, runtime.launchSuccessCount, runtime.switchCount, metrics.errors, metrics.warnings]);
 
   return (
     <div className="flex flex-col h-full overflow-y-auto app-scroll">
@@ -114,7 +115,7 @@ export function Analytics() {
             Analytics
           </h1>
           <span className="text-[#333333]" style={{ fontSize: "11px", fontFamily: "'JetBrains Mono', monospace" }}>
-            Performance monitoring Р’В· {altProfiles.length} profiles
+            Operational analytics only (runtime/history/reference)
           </span>
         </div>
 
@@ -136,12 +137,12 @@ export function Analytics() {
       <div className="flex flex-col gap-5 p-6">
         <div className="grid grid-cols-6 gap-3">
           {[
-            { label: "Avg Download", value: stat.avgDownload.toFixed(1), unit: "Mbps", icon: TrendingUp },
-            { label: "Avg Upload", value: stat.avgUpload.toFixed(1), unit: "Mbps", icon: Activity },
-            { label: "Avg Latency", value: stat.avgLatency.toFixed(0), unit: "ms", icon: Zap },
-            { label: "Avg Stability", value: stat.avgStability.toFixed(1), unit: "%", icon: Shield },
-            { label: "Errors", value: String(stat.errors), unit: "events", icon: AlertCircle },
-            { label: "Warnings", value: String(stat.warnings), unit: "events", icon: Clock },
+            { label: "Profiles", value: String(metrics.totalProfiles), unit: "total", icon: Activity },
+            { label: "Tested", value: String(metrics.testedProfiles), unit: "profiles", icon: CheckCircle2 },
+            { label: "Working", value: String(metrics.workingProfiles), unit: "profiles", icon: CheckCircle2 },
+            { label: "Failed", value: String(metrics.failedProfiles), unit: "profiles", icon: XCircle },
+            { label: "Unstable", value: String(metrics.unstableProfiles), unit: "profiles", icon: AlertCircle },
+            { label: "Runtime", value: metrics.runtimeRunning ? "ON" : "OFF", unit: "state", icon: Clock },
           ].map((item) => (
             <div key={item.label} className="flex flex-col gap-2.5 bg-[#0e0e0e] border border-[#1a1a1a] rounded-lg p-4">
               <div className="flex items-center justify-between">
@@ -163,64 +164,47 @@ export function Analytics() {
         <div className="grid grid-cols-2 gap-5">
           <div className="bg-[#0e0e0e] border border-[#1a1a1a] rounded-xl p-5">
             <div className="mb-5">
-              <span className="text-white" style={{ fontSize: "12px", fontFamily: "'Inter', sans-serif", fontWeight: 500 }}>Throughput</span>
+              <span className="text-white" style={{ fontSize: "12px", fontFamily: "'Inter', sans-serif", fontWeight: 500 }}>Per-profile runtime history</span>
             </div>
-            <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={chartData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="anDl" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="white" stopOpacity={0.07} />
-                    <stop offset="100%" stopColor="white" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="anUl" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#555555" stopOpacity={0.08} />
-                    <stop offset="100%" stopColor="#555555" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="#141414" vertical={false} />
-                <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} interval={4} />
-                <YAxis tick={{ fontSize: 9, fill: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} />
-                <Tooltip content={<CustomTooltip />} />
-                <Area type="monotone" dataKey="download" name="download" stroke="white" strokeWidth={1.3} fill="url(#anDl)" dot={false} />
-                <Area type="monotone" dataKey="upload" name="upload" stroke="#555555" strokeWidth={1} fill="url(#anUl)" dot={false} />
-              </AreaChart>
-            </ResponsiveContainer>
+            {profileOps.length === 0 ? (
+              <div className="text-[#444444]" style={{ fontSize: "11px" }}>No analytics data available yet.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={profileOps} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                  <CartesianGrid stroke="#141414" vertical={false} />
+                  <XAxis dataKey="name" tick={{ fontSize: 9, fill: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 9, fill: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="launches" name="launches" fill="#555555" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="success" name="success" fill="#6a8a6a" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="fail" name="fail" fill="#8a2222" radius={[2, 2, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
 
           <div className="bg-[#0e0e0e] border border-[#1a1a1a] rounded-xl p-5">
             <div className="mb-5">
-              <span className="text-white" style={{ fontSize: "12px", fontFamily: "'Inter', sans-serif", fontWeight: 500 }}>Stability</span>
+              <span className="text-white" style={{ fontSize: "12px", fontFamily: "'Inter', sans-serif", fontWeight: 500 }}>Operational events ({timeRange})</span>
             </div>
             <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={stabilityData} margin={{ top: 0, right: 0, left: -25, bottom: 0 }}>
+              <BarChart data={eventsData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
                 <CartesianGrid stroke="#141414" vertical={false} />
-                <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} interval={2} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 9, fill: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} />
+                <XAxis dataKey="key" tick={{ fontSize: 9, fill: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 9, fill: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} />
                 <Tooltip content={<CustomTooltip />} />
-                <Line type="monotone" dataKey="stability" name="stability" stroke="white" strokeWidth={1.5} dot={false} />
-                <Line type="monotone" dataKey="quality" name="quality" stroke="#555555" strokeWidth={1} dot={false} strokeDasharray="3 3" />
-              </LineChart>
+                <Bar dataKey="value" name="count" fill="#444444" radius={[2, 2, 0, 0]} />
+              </BarChart>
             </ResponsiveContainer>
+            <div className="mt-3 text-[#444444]" style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace" }}>
+              last success: {metrics.lastSuccess}
+            </div>
+            <div className="text-[#444444]" style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace" }}>
+              last fail: {metrics.lastFail}
+            </div>
           </div>
-        </div>
-
-        <div className="bg-[#0e0e0e] border border-[#1a1a1a] rounded-xl p-5">
-          <div className="mb-5">
-            <span className="text-white" style={{ fontSize: "12px", fontFamily: "'Inter', sans-serif", fontWeight: 500 }}>Events by Day</span>
-          </div>
-          <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={eventsData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-              <CartesianGrid stroke="#141414" vertical={false} />
-              <XAxis dataKey="day" tick={{ fontSize: 9, fill: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 9, fill: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} />
-              <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="errors" name="errors" fill="#3a1212" radius={[2, 2, 0, 0]} />
-              <Bar dataKey="warnings" name="warnings" fill="#252510" radius={[2, 2, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
         </div>
       </div>
     </div>
   );
 }
-

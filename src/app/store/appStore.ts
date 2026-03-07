@@ -12,6 +12,7 @@ interface AppStore {
   refresh: () => Promise<void>;
   setActiveProfile: (profileId: string) => Promise<void>;
   setBypassEnabled: (enabled: boolean) => Promise<void>;
+  testAllProfiles: () => Promise<void>;
   restartAnalysis: () => Promise<void>;
   updateSettings: (settings: Partial<SettingsState>) => Promise<void>;
   clearLogs: () => Promise<void>;
@@ -106,6 +107,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
 
+  async testAllProfiles() {
+    set({ loading: true, error: null });
+    if (!desktopApi.hasBridge()) {
+      const state = createFallbackAppState();
+      set({ appState: state, initialized: true, loading: false, error: state.runtime.error || "Electron bridge unavailable" });
+      return;
+    }
+    try {
+      const state = await desktopApi.testAllProfiles();
+      set({ appState: state, loading: false, error: null });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to run Test All";
+      set({ loading: false, error: message });
+    }
+  },
+
   async restartAnalysis() {
     set({ loading: true, error: null });
     if (!desktopApi.hasBridge()) {
@@ -172,5 +189,7 @@ export function stopAppStoreListener(): void {
     stopListener = null;
   }
 }
+
+
 
 

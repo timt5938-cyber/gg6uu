@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+﻿import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppState,
   DiagnosticEntry,
@@ -33,6 +33,8 @@ export type ElectronAPI = {
   openReferenceFolder(): Promise<string>;
   getDpiBypassState(): Promise<DpiBypassState>;
   setBypassEnabled(enabled: boolean): Promise<AppState>;
+  testAllProfiles(): Promise<AppState>;
+  getRuntimeState(): Promise<AppState["runtime"]>;
   getDiagnostics(): Promise<DiagnosticEntry[]>;
   getReferenceSummary(): Promise<ReferenceSummary>;
   getIpLists(): Promise<IpListReference[]>;
@@ -96,6 +98,8 @@ const electronApi: ElectronAPI = {
   openReferenceFolder: () => ipcRenderer.invoke("app:openReferenceFolder"),
   getDpiBypassState: () => ipcRenderer.invoke("app:getDpiBypassState"),
   setBypassEnabled: (enabled) => ipcRenderer.invoke("app:setBypassEnabled", enabled),
+  testAllProfiles: () => ipcRenderer.invoke("app:testAllProfiles"),
+  getRuntimeState: () => ipcRenderer.invoke("app:getRuntimeState"),
   getDiagnostics: () => ipcRenderer.invoke("app:getDiagnostics"),
   getReferenceSummary: () => ipcRenderer.invoke("app:getReferenceSummary"),
   getIpLists: () => ipcRenderer.invoke("app:getIpLists"),
@@ -132,3 +136,5 @@ const electronApi: ElectronAPI = {
 };
 
 contextBridge.exposeInMainWorld("electronAPI", electronApi);
+
+

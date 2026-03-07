@@ -1,16 +1,5 @@
-import { useState } from "react";
-import {
-  Power,
-  StopCircle,
-  ChevronDown,
-  ArrowDown,
-  ArrowUp,
-  Zap,
-  Minus,
-  X,
-  Shield,
-  Activity,
-} from "lucide-react";
+﻿import { useState, type CSSProperties } from "react";
+import { Power, StopCircle, ChevronDown, Minus, X, Shield, Activity } from "lucide-react";
 import { miniMinimize, miniClose } from "../../lib/electron";
 import { useUiData } from "../hooks/useUiData";
 import { useAppStore } from "../store/appStore";
@@ -18,14 +7,14 @@ import { useAppStore } from "../store/appStore";
 export function MiniMode() {
   const [showProfiles, setShowProfiles] = useState(false);
 
-  const { altProfiles, activeAlt, summary } = useUiData();
+  const { altProfiles, summary, runtime, profiles } = useUiData();
   const setActiveProfile = useAppStore((state) => state.setActiveProfile);
   const setBypassEnabled = useAppStore((state) => state.setBypassEnabled);
 
-  const isRunning = summary.dataAvailable && Boolean(activeAlt);
-  const availableAlts = altProfiles.filter((item) => item.status === "active" || item.status === "online" || item.status === "unstable");
-
-  const currentAlt = activeAlt ?? altProfiles[0] ?? null;
+  const isRunning = runtime.isRunning;
+  const availableAlts = altProfiles;
+  const currentAlt = altProfiles.find((item) => item.isActive) ?? altProfiles[0] ?? null;
+  const currentProfile = profiles.find((item) => item.id === currentAlt?.id) ?? null;
 
   return (
     <div className="w-screen h-screen bg-[#080808] flex items-center justify-center overflow-hidden">
@@ -38,14 +27,14 @@ export function MiniMode() {
           borderRadius: "10px",
         }}
       >
-        <div className="flex items-center justify-between h-8 px-3 bg-[#080808] border-b border-[#151515] rounded-t-[10px]">
+        <div className="flex items-center justify-between h-8 px-3 bg-[#080808] border-b border-[#151515] rounded-t-[10px]" style={{ WebkitAppRegion: "drag" } as CSSProperties}>
           <div className="flex items-center gap-2">
             <Shield size={10} className="text-[#333333]" />
             <span className="text-[#3a3a3a] tracking-[0.15em] uppercase" style={{ fontSize: "9px", fontWeight: 600 }}>
               AltProxy
             </span>
           </div>
-          <div className="flex items-center gap-0">
+          <div className="flex items-center gap-0" style={{ WebkitAppRegion: "no-drag" } as CSSProperties}>
             <button
               type="button"
               onClick={miniMinimize}
@@ -72,53 +61,49 @@ export function MiniMode() {
               </span>
             </div>
             <div className={`px-2 py-0.5 rounded-sm ${isRunning ? "bg-white" : "bg-[#1a1a1a] border border-[#252525]"}`}>
-              <span
-                style={{
-                  fontSize: "8px",
-                  fontFamily: "'Inter', sans-serif",
-                  fontWeight: 700,
-                  letterSpacing: "0.12em",
-                  color: isRunning ? "#000" : "#333333",
-                }}
-              >
+              <span style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", fontWeight: 700, letterSpacing: "0.12em", color: isRunning ? "#000" : "#333333" }}>
                 {isRunning ? "ACTIVE" : "STOPPED"}
               </span>
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 mb-3">
-            {[
-              { label: "Download", value: isRunning ? `${currentAlt?.speed.toFixed(0) || 0}` : "--", unit: "Mbps", icon: ArrowDown },
-              { label: "Upload", value: isRunning ? `${currentAlt?.upload.toFixed(0) || 0}` : "--", unit: "Mbps", icon: ArrowUp },
-              { label: "Latency", value: isRunning ? `${currentAlt?.latency || 0}` : "--", unit: "ms", icon: Zap },
-            ].map((item) => (
-              <div key={item.label} className="flex flex-col gap-1 bg-[#0e0e0e] border border-[#181818] rounded-md p-2.5">
-                <div className="flex items-center gap-1">
-                  <item.icon size={9} className="text-[#2a2a2a]" />
-                  <span style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.08em", color: "#2a2a2a" }}>
-                    {item.label.toUpperCase()}
-                  </span>
-                </div>
-                <div className="flex items-baseline gap-0.5">
-                  <span className="text-white" style={{ fontSize: "15px", fontWeight: 300, letterSpacing: "-0.02em" }}>{item.value}</span>
-                  <span style={{ fontSize: "8px", fontFamily: "'JetBrains Mono', monospace", color: "#333333" }}>{item.unit}</span>
-                </div>
-              </div>
-            ))}
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <div className="flex flex-col gap-1 bg-[#0e0e0e] border border-[#181818] rounded-md p-2.5">
+              <span style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.08em", color: "#2a2a2a" }}>
+                LAUNCHES
+              </span>
+              <span className="text-white" style={{ fontSize: "15px", fontWeight: 300, letterSpacing: "-0.02em" }}>{currentProfile?.launchCount ?? 0}</span>
+            </div>
+            <div className="flex flex-col gap-1 bg-[#0e0e0e] border border-[#181818] rounded-md p-2.5">
+              <span style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.08em", color: "#2a2a2a" }}>
+                LAST TEST
+              </span>
+              <span className="text-white" style={{ fontSize: "12px", fontWeight: 300, letterSpacing: "-0.02em" }}>{currentProfile?.lastTestResult ?? "n/a"}</span>
+            </div>
+            <div className="flex flex-col gap-1 bg-[#0e0e0e] border border-[#181818] rounded-md p-2.5">
+              <span style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.08em", color: "#2a2a2a" }}>
+                SUCCESS
+              </span>
+              <span className="text-white" style={{ fontSize: "15px", fontWeight: 300, letterSpacing: "-0.02em" }}>{currentProfile?.successCount ?? 0}</span>
+            </div>
+            <div className="flex flex-col gap-1 bg-[#0e0e0e] border border-[#181818] rounded-md p-2.5">
+              <span style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.08em", color: "#2a2a2a" }}>
+                FAIL
+              </span>
+              <span className="text-white" style={{ fontSize: "15px", fontWeight: 300, letterSpacing: "-0.02em" }}>{currentProfile?.failCount ?? 0}</span>
+            </div>
           </div>
 
           <div className="flex items-center gap-2 mb-3">
             <div className="flex items-center gap-1">
               <Activity size={9} className="text-[#252525]" />
               <span style={{ fontSize: "8px", fontFamily: "'Inter', sans-serif", color: "#252525", letterSpacing: "0.08em", fontWeight: 600 }}>
-                STABILITY
+                RUNTIME STATUS
               </span>
             </div>
-            <div className="flex-1 h-px bg-[#151515] rounded-full overflow-hidden">
-              <div className="h-full bg-white rounded-full transition-all duration-500" style={{ width: isRunning ? `${currentAlt?.stability || 0}%` : "0%" }} />
-            </div>
+            <div className="flex-1 h-px bg-[#151515] rounded-full" />
             <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: "#3a3a3a" }}>
-              {isRunning ? `${currentAlt?.stability.toFixed(0) || 0}%` : "--"}
+              {currentProfile?.runtimeStatus ?? "n/a"}
             </span>
           </div>
         </div>
@@ -161,30 +146,34 @@ export function MiniMode() {
                 Select Profile
               </span>
             </div>
-            {availableAlts.map((alt) => (
-              <button
-                key={alt.id}
-                type="button"
-                onClick={() => {
-                  void setActiveProfile(alt.id);
-                  setShowProfiles(false);
-                }}
-                className={`flex items-center gap-3 w-full px-4 py-2.5 text-left transition-all hover:bg-[#111111] ${
-                  alt.id === currentAlt?.id ? "bg-[#0e0e0e]" : ""
-                }`}
-              >
-                <div className="w-1.5 h-1.5 rounded-full shrink-0 bg-white" />
-                <span className="text-white flex-1" style={{ fontSize: "11px", fontWeight: alt.id === currentAlt?.id ? 500 : 400 }}>{alt.name}</span>
-                <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: "#333333" }}>{alt.speed.toFixed(0)} Mbps</span>
-                <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: "#2a2a2a" }}>{alt.latency}ms</span>
-              </button>
-            ))}
+            {availableAlts.map((alt) => {
+              const profile = profiles.find((item) => item.id === alt.id);
+              return (
+                <button
+                  key={alt.id}
+                  type="button"
+                  onClick={() => {
+                    void setActiveProfile(alt.id);
+                    setShowProfiles(false);
+                  }}
+                  className={`flex items-center gap-3 w-full px-4 py-2.5 text-left transition-all hover:bg-[#111111] ${
+                    alt.id === currentAlt?.id ? "bg-[#0e0e0e]" : ""
+                  }`}
+                >
+                  <div className="w-1.5 h-1.5 rounded-full shrink-0 bg-white" />
+                  <span className="text-white flex-1" style={{ fontSize: "11px", fontWeight: alt.id === currentAlt?.id ? 500 : 400 }}>{alt.name}</span>
+                  <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: "#333333" }}>
+                    {profile?.runtimeStatus ?? "n/a"}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         )}
 
         <div className="flex items-center justify-between px-4 py-2 border-t border-[#131313] rounded-b-[10px]">
           <span style={{ fontSize: "8px", fontFamily: "'JetBrains Mono', monospace", color: "#252525" }}>
-            {currentAlt?.protocol || "-"} В· {currentAlt?.location || "-"}
+            {runtime.activePid ? `pid ${runtime.activePid}` : "no process"}
           </span>
           <span style={{ fontSize: "8px", fontFamily: "'JetBrains Mono', monospace", color: "#252525" }}>
             {summary.profileCount} profiles

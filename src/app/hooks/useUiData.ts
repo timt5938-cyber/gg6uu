@@ -2,11 +2,12 @@
 
 import { useAppStore } from "../store/appStore";
 import type { LogEntry, Profile } from "../types/state";
+
 interface UiAltProfile {
   id: string;
   name: string;
   label: string;
-  status: "active" | "online" | "unstable" | "offline" | "error";
+  status: "available" | "not_tested" | "testing" | "working" | "failed" | "active" | "stopped";
   isActive: boolean;
   isFavorite: boolean;
   speed: number;
@@ -23,26 +24,25 @@ interface UiAltProfile {
   tag?: "best" | "recommended" | "unstable" | "offline";
 }
 
-
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
 function toAltProfile(profile: Profile): UiAltProfile {
-  const disabled = !profile.isAvailable || profile.status === "offline" || profile.status === "error";
-  const normalizedStatus = profile.isActive ? "active" : profile.status;
-
-  const load = clampNumber(Math.round(100 - profile.healthScore + profile.stabilityScore * 0.2), 0, 100);
-  const successRate = clampNumber(profile.healthScore, 0, 100);
+  const normalizedStatus = profile.isActive ? "active" : profile.runtimeStatus;
+  const canShowLive = normalizedStatus === "active";
+  const totalRuns = profile.successCount + profile.failCount;
+  const successRate = totalRuns > 0 ? clampNumber((profile.successCount / totalRuns) * 100, 0, 100) : 0;
+  const load = clampNumber(profile.launchCount * 5, 0, 100);
 
   const tag: UiAltProfile["tag"] =
     profile.isActive
       ? "best"
-      : normalizedStatus === "online" && profile.healthScore >= 80
+      : normalizedStatus === "working" && successRate >= 80
         ? "recommended"
-        : normalizedStatus === "unstable"
+        : normalizedStatus === "failed"
           ? "unstable"
-          : normalizedStatus === "offline" || normalizedStatus === "error"
+          : normalizedStatus === "stopped" || normalizedStatus === "failed" || normalizedStatus === "not_tested"
             ? "offline"
             : undefined;
 
@@ -52,14 +52,14 @@ function toAltProfile(profile: Profile): UiAltProfile {
     label: profile.notes[0] ?? profile.profileClass,
     status: normalizedStatus,
     isActive: profile.isActive,
-    isFavorite: profile.healthScore >= 85,
-    speed: disabled ? 0 : profile.downloadSpeed,
-    upload: disabled ? 0 : profile.uploadSpeed,
-    latency: disabled ? 0 : profile.latency,
-    stability: clampNumber(profile.stabilityScore, 0, 100),
-    quality: clampNumber(profile.healthScore, 0, 100),
+    isFavorite: profile.successCount > 0 && profile.failCount === 0,
+    speed: canShowLive ? profile.downloadSpeed : 0,
+    upload: canShowLive ? profile.uploadSpeed : 0,
+    latency: canShowLive ? profile.latency : 0,
+    stability: successRate,
+    quality: successRate,
     load,
-    uptime: profile.isAvailable ? "running" : "offline",
+    uptime: profile.lastSuccessAt ?? "not available",
     lastCheck: profile.lastCheckedAt,
     successRate,
     location: profile.routeType.toUpperCase(),
@@ -92,6 +92,7 @@ export function useUiData() {
       altProfiles,
       activeAlt,
       logEntries,
+      profiles: appState.profiles,
       speedHistory: appState.speedHistory,
       stabilityHistory: appState.stabilityHistory,
       switchHistory: appState.switchHistory,
@@ -107,4 +108,3 @@ export function useUiData() {
     };
   }, [appState]);
 }
-

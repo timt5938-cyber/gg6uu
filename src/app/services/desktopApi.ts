@@ -120,6 +120,20 @@ export const desktopApi = {
     return window.electronAPI.setBypassEnabled(enabled);
   },
 
+  async testAllProfiles(): Promise<AppState> {
+    if (!window.electronAPI) {
+      return fallbackWithError(`${bridgeMissingMessage()} Cannot run Test All.`);
+    }
+    return window.electronAPI.testAllProfiles();
+  },
+
+  async getRuntimeState(): Promise<AppState["runtime"]> {
+    if (!window.electronAPI) {
+      return createFallbackAppState().runtime;
+    }
+    return window.electronAPI.getRuntimeState();
+  },
+
   async restartAnalysis(): Promise<AppState> {
     if (!window.electronAPI) {
       return fallbackWithError(bridgeMissingMessage());
@@ -213,3 +227,5 @@ export const desktopApi = {
     return window.electronAPI.onStateUpdated(callback);
   },
 };
+
+

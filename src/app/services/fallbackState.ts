@@ -64,6 +64,24 @@ export function createFallbackAppState(): AppState {
       referenceAvailable: false,
       autoRefreshEnabled: defaultSettings.autoRefresh,
       watcherActive: false,
+      isRunning: false,
+      isTesting: false,
+      activeProfileId: null,
+      activePid: null,
+      activeStartedAt: null,
+      lastStoppedAt: null,
+      lastExitCode: null,
+      stopRequested: false,
+      testAllInProgress: false,
+      testQueue: [],
+      testResults: {},
+      lastRuntimeError: "Electron bridge unavailable",
+      lastRuntimeEvent: "fallback-mode",
+      lastSuccessfulProfileId: null,
+      lastLaunchAt: null,
+      launchSuccessCount: 0,
+      launchFailureCount: 0,
+      switchCount: 0,
     },
     dpiBypassState: {
       enabled: false,
@@ -99,3 +117,5 @@ export function createFallbackAppState(): AppState {
 }
 
 export const defaultRendererSettings = defaultSettings;
+
+

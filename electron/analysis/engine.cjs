@@ -260,6 +260,16 @@ function parseProfileFromFile(file, content, scannedAt) {
     ].filter(Boolean),
     profileClass: detectProfileClass(file.name),
     linkedIpLists: Array.from(listRefs),
+    runtimeStatus: "not_tested",
+    lastTestResult: "not_tested",
+    lastTestAt: null,
+    lastSuccessAt: null,
+    lastFailureAt: null,
+    lastExitCode: null,
+    launchCount: 0,
+    successCount: 0,
+    failCount: 0,
+    isWorkingForCurrentUser: false,
   };
 }
 
@@ -641,3 +651,5 @@ function scanReference(referenceRoot, options = {}) {
 module.exports = {
   scanReference,
 };
+
+
