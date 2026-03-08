@@ -1,4 +1,4 @@
-import {
+﻿import {
   app,
   BrowserWindow,
   ipcMain,
@@ -18,6 +18,7 @@ import { scanReference } from "./analysisEngine";
 import { createLogger } from "./logger";
 import { createSettingsStore, readSettings, updateSettings } from "./settings";
 import { WinwsRuntimeService, type WinwsRuntimeDescriptor, type WinwsRuntimeState } from "./winwsRuntime";
+import { RemoteControlService, type RemoteControlInfo } from "./remoteControlService";
 import type {
   AppState,
   ConnectionStatus,
@@ -95,6 +96,7 @@ const proxyProcesses = new Map<string, ChildProcess>();
 let activeStrategyProcess: ChildProcess | null = null;
 let activeStrategyProfileId: string | null = null;
 let testAllCancelRequested = false;
+let remoteControlService: RemoteControlService | null = null;
 
 function resolveAppIconPath(): string | undefined {
   const candidates = [
@@ -454,6 +456,8 @@ function broadcastState(): void {
   for (const target of targets) {
     target.webContents.send("app:stateUpdated", appState);
   }
+
+  remoteControlService?.handleAppState(appState as unknown as Record<string, unknown>);
 }
 
 async function runScan(reason = "manual"): Promise<AppState> {
@@ -1360,6 +1364,35 @@ function clearLogs(): AppState {
   return appState;
 }
 
+function getAnalyticsSummary(): Record<string, unknown> {
+  const profiles = appState.profiles;
+  const runtime = appState.runtime;
+
+  const testedProfiles = profiles.filter((profile) => profile.lastTestResult !== "not_tested").length;
+  const workingProfiles = profiles.filter((profile) => profile.runtimeStatus === "working" || profile.runtimeStatus === "active").length;
+  const failedProfiles = profiles.filter((profile) => profile.runtimeStatus === "failed").length;
+  const youtubeWorking = profiles.filter((profile) => profile.youtubeStatus === "working").length;
+  const discordWorking = profiles.filter((profile) => profile.discordStatus === "working").length;
+
+  return {
+    scannedAt: runtime.lastAnalysisAt,
+    profilesFound: profiles.length,
+    profilesTested: testedProfiles,
+    profilesWorking: workingProfiles,
+    profilesFailed: failedProfiles,
+    ipListsFound: appState.ipLists.length,
+    runtimeEnabled: appState.dpiBypassState.enabled,
+    runtimeRunning: runtime.isRunning,
+    activeProfileId: runtime.activeProfileId || appState.activeProfileId,
+    launchSuccessCount: runtime.launchSuccessCount,
+    launchFailureCount: runtime.launchFailureCount,
+    switchCount: runtime.switchCount,
+    youtubeWorkingProfiles: youtubeWorking,
+    discordWorkingProfiles: discordWorking,
+    bothWorkingProfiles: profiles.filter((profile) => profile.combinedResult === "both").length,
+    testResults: runtime.testResults,
+  };
+}
 interface ProxyConfig {
   executable: string;
   host: string;
@@ -1679,6 +1712,41 @@ function registerIpc(): void {
   ipcMain.handle("app:getServiceStatus", async () => queryServiceStatus());
   ipcMain.handle("app:installService", async (_event, profileId: string) => installServiceForProfile(profileId));
   ipcMain.handle("app:removeService", async () => removeService());
+  ipcMain.handle("app:getRemoteControlInfo", async (): Promise<RemoteControlInfo | null> =>
+    remoteControlService ? remoteControlService.getInfo() : null,
+  );
+  ipcMain.handle("app:updateRemoteControlConfig", async (_event, patch: Record<string, unknown>) => {
+    if (!remoteControlService) {
+      return null;
+    }
+
+    return remoteControlService.updateConfig({
+      enabled: typeof patch.enabled === "boolean" ? patch.enabled : undefined,
+      bindMode: patch.bindMode === "lan" ? "lan" : "localhost",
+      port: typeof patch.port === "number" ? patch.port : undefined,
+      allowNewPairing: typeof patch.allowNewPairing === "boolean" ? patch.allowNewPairing : undefined,
+      pairingExpirationSec: typeof patch.pairingExpirationSec === "number" ? patch.pairingExpirationSec : undefined,
+      remoteLogs: typeof patch.remoteLogs === "boolean" ? patch.remoteLogs : undefined,
+    });
+  });
+  ipcMain.handle("app:generateRemotePairingCode", async () => {
+    if (!remoteControlService) {
+      return null;
+    }
+    return remoteControlService.generatePairingCode();
+  });
+  ipcMain.handle("app:getRemotePairingCode", async () => {
+    if (!remoteControlService) {
+      return { code: null, expiresAt: null };
+    }
+    return remoteControlService.getPairingCode();
+  });
+  ipcMain.handle("app:unpairRemoteDevice", async (_event, deviceId: string) => {
+    if (!remoteControlService) {
+      return null;
+    }
+    return remoteControlService.unpairDevice(String(deviceId || ""));
+  });
 
   ipcMain.on("window:minimize", () => mainWindow?.minimize());
   ipcMain.handle("window:minimize", async () => {
@@ -1816,12 +1884,45 @@ app.on("second-instance", () => {
 
 app.whenReady().then(async () => {
   app.setAppUserModelId("com.altproxy.control-center");
+
+  remoteControlService = new RemoteControlService({
+    logger,
+    userDataDir: app.getPath("userData"),
+    appName: "AltProxy",
+    appVersion: app.getVersion(),
+    handlers: {
+      getAppState: () => appState as unknown as Record<string, unknown>,
+      getProfiles: () => appState.profiles as unknown as Array<Record<string, unknown>>,
+      getRuntimeState: () => appState.runtime as unknown as Record<string, unknown>,
+      getLogs: () => appState.logs as unknown as Array<Record<string, unknown>>,
+      getAnalyticsSummary: () => getAnalyticsSummary(),
+      getDiagnostics: () => appState.diagnostics as unknown as Array<Record<string, unknown>>,
+      startRuntime: async (profileId?: string) => {
+        if (profileId) {
+          await setActiveProfile(profileId, "remote-start");
+        }
+        return setBypassEnabled(true);
+      },
+      stopRuntime: async () => setBypassEnabled(false),
+      restartRuntime: async (profileId?: string) => {
+        await setBypassEnabled(false);
+        if (profileId) {
+          await setActiveProfile(profileId, "remote-restart");
+        }
+        return setBypassEnabled(true);
+      },
+      selectProfile: async (profileId: string) => setActiveProfile(profileId, "remote-select"),
+      testAllProfiles: async () => testAllProfiles(),
+    },
+  });
+
   registerIpc();
   createMainWindow();
   createTray();
 
   startWatcher();
   applyAutoRefresh();
+  await remoteControlService.startIfEnabled();
 
   if (settings.autoScanReferenceOnStartup) {
     await runScan("startup");
@@ -1852,6 +1953,7 @@ app.on("before-quit", () => {
 
   void stopActiveProfile("app-quit");
   void winwsRuntimeService.stopRuntime("app-quit");
+  void remoteControlService?.stopServer();
 
   for (const [altId, proc] of proxyProcesses) {
     logger.info("PROXY", `Terminating proxy process for ${altId} (${proc.pid})`);
@@ -1867,62 +1969,3 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

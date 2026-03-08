@@ -10,6 +10,29 @@
 } from "../types/state";
 import { createFallbackAppState, defaultRendererSettings } from "./fallbackState";
 
+type RemoteControlInfo = {
+  enabled: boolean;
+  bindMode: "localhost" | "lan";
+  port: number;
+  isRunning: boolean;
+  bindAddress: string;
+  networkAddresses: string[];
+  pairingCode: string | null;
+  pairingExpiresAt: string | null;
+  allowNewPairing: boolean;
+  pairedDevices: Array<{
+    id: string;
+    name: string;
+    pairedAt: string;
+    lastSeenAt: string | null;
+  }>;
+  activeClients: number;
+  authFailures: number;
+  lastRemoteAction: string | null;
+  lastRemoteConnectionAt: string | null;
+  lastError: string | null;
+};
+
 function fallbackWithError(message: string): AppState {
   const base = createFallbackAppState();
   const now = new Date().toISOString();
@@ -205,6 +228,48 @@ export const desktopApi = {
     return window.electronAPI.removeService();
   },
 
+  async getRemoteControlInfo(): Promise<RemoteControlInfo | null> {
+    if (!window.electronAPI) {
+      return null;
+    }
+    return window.electronAPI.getRemoteControlInfo();
+  },
+
+  async updateRemoteControlConfig(patch: {
+    enabled?: boolean;
+    bindMode?: "localhost" | "lan";
+    port?: number;
+    allowNewPairing?: boolean;
+    pairingExpirationSec?: number;
+    remoteLogs?: boolean;
+  }): Promise<RemoteControlInfo | null> {
+    if (!window.electronAPI) {
+      return null;
+    }
+    return window.electronAPI.updateRemoteControlConfig(patch);
+  },
+
+  async generateRemotePairingCode(): Promise<{ code: string; expiresAt: string } | null> {
+    if (!window.electronAPI) {
+      return null;
+    }
+    return window.electronAPI.generateRemotePairingCode();
+  },
+
+  async getRemotePairingCode(): Promise<{ code: string | null; expiresAt: string | null }> {
+    if (!window.electronAPI) {
+      return { code: null, expiresAt: null };
+    }
+    return window.electronAPI.getRemotePairingCode();
+  },
+
+  async unpairRemoteDevice(deviceId: string): Promise<RemoteControlInfo | null> {
+    if (!window.electronAPI) {
+      return null;
+    }
+    return window.electronAPI.unpairRemoteDevice(deviceId);
+  },
+
   async minimizeWindow(): Promise<void> {
     await window.electronAPI?.minimizeWindow();
   },
@@ -227,5 +292,3 @@ export const desktopApi = {
     return window.electronAPI.onStateUpdated(callback);
   },
 };
-
-

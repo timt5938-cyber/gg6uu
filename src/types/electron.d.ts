@@ -9,7 +9,6 @@
   SettingsState,
 } from "../app/types/state";
 
-
 type WinwsRuntimeDescriptor = {
   rootDir: string;
   exePath: string;
@@ -33,6 +32,29 @@ type WinwsRuntimeState = {
   exePath: string | null;
   runtimeRoot: string | null;
   validationErrors: string[];
+};
+
+type RemoteControlInfo = {
+  enabled: boolean;
+  bindMode: "localhost" | "lan";
+  port: number;
+  isRunning: boolean;
+  bindAddress: string;
+  networkAddresses: string[];
+  pairingCode: string | null;
+  pairingExpiresAt: string | null;
+  allowNewPairing: boolean;
+  pairedDevices: Array<{
+    id: string;
+    name: string;
+    pairedAt: string;
+    lastSeenAt: string | null;
+  }>;
+  activeClients: number;
+  authFailures: number;
+  lastRemoteAction: string | null;
+  lastRemoteConnectionAt: string | null;
+  lastError: string | null;
 };
 
 export type ProxyConfig = {
@@ -73,6 +95,19 @@ export type ElectronAPI = {
   restartWinwsRuntime(args?: string[], cwd?: string): Promise<WinwsRuntimeState>;
   getWinwsRuntimeState(): Promise<WinwsRuntimeState>;
 
+  getRemoteControlInfo(): Promise<RemoteControlInfo | null>;
+  updateRemoteControlConfig(patch: {
+    enabled?: boolean;
+    bindMode?: "localhost" | "lan";
+    port?: number;
+    allowNewPairing?: boolean;
+    pairingExpirationSec?: number;
+    remoteLogs?: boolean;
+  }): Promise<RemoteControlInfo | null>;
+  generateRemotePairingCode(): Promise<{ code: string; expiresAt: string } | null>;
+  getRemotePairingCode(): Promise<{ code: string | null; expiresAt: string | null }>;
+  unpairRemoteDevice(deviceId: string): Promise<RemoteControlInfo | null>;
+
   minimizeWindow(): Promise<void>;
   maximizeWindow(): Promise<boolean>;
   closeWindow(): Promise<void>;
@@ -108,6 +143,3 @@ declare global {
 }
 
 export {};
-
-
-

@@ -5,6 +5,7 @@ import {
   BarChart2,
   ScrollText,
   Settings,
+  Smartphone,
   Minimize2,
   Circle,
   ChevronRight,
@@ -18,6 +19,7 @@ const navItems = [
   { path: "/analytics", icon: BarChart2, label: "Analytics" },
   { path: "/logs", icon: ScrollText, label: "Logs" },
   { path: "/settings", icon: Settings, label: "Settings" },
+  { path: "/phone", icon: Smartphone, label: "Phone Link" },
 ];
 
 export function Sidebar() {
@@ -133,4 +135,3 @@ export function Sidebar() {
     </div>
   );
 }
-

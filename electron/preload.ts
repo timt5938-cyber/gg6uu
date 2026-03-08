@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+﻿import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppState,
   DiagnosticEntry,
@@ -9,7 +9,6 @@ import type {
   ReferenceSummary,
   SettingsState,
 } from "../src/app/types/state";
-
 
 type WinwsRuntimeDescriptor = {
   rootDir: string;
@@ -34,6 +33,29 @@ type WinwsRuntimeState = {
   exePath: string | null;
   runtimeRoot: string | null;
   validationErrors: string[];
+};
+
+type RemoteControlInfo = {
+  enabled: boolean;
+  bindMode: "localhost" | "lan";
+  port: number;
+  isRunning: boolean;
+  bindAddress: string;
+  networkAddresses: string[];
+  pairingCode: string | null;
+  pairingExpiresAt: string | null;
+  allowNewPairing: boolean;
+  pairedDevices: Array<{
+    id: string;
+    name: string;
+    pairedAt: string;
+    lastSeenAt: string | null;
+  }>;
+  activeClients: number;
+  authFailures: number;
+  lastRemoteAction: string | null;
+  lastRemoteConnectionAt: string | null;
+  lastError: string | null;
 };
 
 export type ProxyConfig = {
@@ -74,6 +96,19 @@ export type ElectronAPI = {
   restartWinwsRuntime(args?: string[], cwd?: string): Promise<WinwsRuntimeState>;
   getWinwsRuntimeState(): Promise<WinwsRuntimeState>;
 
+  getRemoteControlInfo(): Promise<RemoteControlInfo | null>;
+  updateRemoteControlConfig(patch: {
+    enabled?: boolean;
+    bindMode?: "localhost" | "lan";
+    port?: number;
+    allowNewPairing?: boolean;
+    pairingExpirationSec?: number;
+    remoteLogs?: boolean;
+  }): Promise<RemoteControlInfo | null>;
+  generateRemotePairingCode(): Promise<{ code: string; expiresAt: string } | null>;
+  getRemotePairingCode(): Promise<{ code: string | null; expiresAt: string | null }>;
+  unpairRemoteDevice(deviceId: string): Promise<RemoteControlInfo | null>;
+
   minimizeWindow(): Promise<void>;
   maximizeWindow(): Promise<boolean>;
   closeWindow(): Promise<void>;
@@ -105,10 +140,7 @@ export type ElectronAPI = {
   platform: NodeJS.Platform;
 };
 
-function on<TArgs extends unknown[]>(
-  channel: string,
-  listener: (...args: TArgs) => void,
-): () => void {
+function on<TArgs extends unknown[]>(channel: string, listener: (...args: TArgs) => void): () => void {
   const wrapped = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => {
     listener(...(args as TArgs));
   };
@@ -145,6 +177,12 @@ const electronApi: ElectronAPI = {
   restartWinwsRuntime: (args, cwd) => ipcRenderer.invoke("app:restartWinwsRuntime", args, cwd),
   getWinwsRuntimeState: () => ipcRenderer.invoke("app:getWinwsRuntimeState"),
 
+  getRemoteControlInfo: () => ipcRenderer.invoke("app:getRemoteControlInfo"),
+  updateRemoteControlConfig: (patch) => ipcRenderer.invoke("app:updateRemoteControlConfig", patch),
+  generateRemotePairingCode: () => ipcRenderer.invoke("app:generateRemotePairingCode"),
+  getRemotePairingCode: () => ipcRenderer.invoke("app:getRemotePairingCode"),
+  unpairRemoteDevice: (deviceId) => ipcRenderer.invoke("app:unpairRemoteDevice", deviceId),
+
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   maximizeWindow: () => ipcRenderer.invoke("window:maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
@@ -174,5 +212,3 @@ const electronApi: ElectronAPI = {
 };
 
 contextBridge.exposeInMainWorld("electronAPI", electronApi);
-
-
